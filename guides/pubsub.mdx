@@ -1,0 +1,248 @@
+---
+title: "Pub/Sub messaging with the pubsub HOF"
+description: "Build message-driven workflows with functools-kit's pubsub, including lifecycle hooks and pluggable PubsubArrayAdapter or PubsubMapAdapter queue backends."
+---
+
+`pubsub` is a higher-order function that wraps an async emitter and gives you a durable, ordered message queue on top of it. Instead of calling the emitter directly and handling retries yourself, you call the wrapper function and the queue ensures messages are delivered in order, retried on failure, and surfaced through lifecycle hooks so you can observe every stage of processing.
+
+The returned function has the same call signature as your emitter but returns `Promise<void>` — callers simply `await` it and know the message was either delivered or the queue timed out and stopped.
+
+---
+
+## Core concepts
+
+Before diving into the API, it helps to understand what happens when you call the wrapped function:
+
+1. `onBegin` fires immediately, before the message enters the queue.
+2. The message is pushed to the queue (in-memory by default).
+3. `onProcess` fires after the push, signalling the message is queued.
+4. The internal broadcast loop picks up the message and calls your emitter.
+5. If the emitter returns `true`, `onEnd` fires and the message is removed from the queue.
+6. If the emitter returns `false` (or throws), the loop waits 1 second and retries. `onError` fires on a throw.
+7. If no message succeeds within the `timeout` window (default 30 seconds), the queue calls `onDestroy` and stops permanently.
+
+---
+
+## Type signatures
+
+```typescript
+export interface IPubsubConfig<Data = any> {
+  onBegin?:   (data: Data) => Promise<void> | void;
+  onProcess?: (data: Data) => Promise<void> | void;
+  onEnd?:     (data: Data) => Promise<void> | void;
+  onError?:   (data: Data, error: unknown) => Promise<void> | void;
+  onDestroy?: (queue: IPubsubArray<[string, Data]>) => Promise<void> | void;
+  queue?:     IPubsubArray<[string, Data]>;
+  timeout?:   number;   // ms — default 30 000
+}
+
+export interface IPubsubWrappedFn<Data = any> {
+  (data: Data): Promise<void>;
+  stop: () => Promise<void>;
+}
+
+export const pubsub: <Data = any>(
+  emitter: (data: Data) => Promise<boolean>,
+  config?: Partial<IPubsubConfig<Data>>
+) => IPubsubWrappedFn<Data>;
+```
+
+The emitter must return `Promise<boolean>`. A `true` result means "delivered, remove from queue". A `false` result (or a thrown error) means "retry later".
+
+---
+
+## Basic usage
+
+The minimal setup passes only an emitter. The queue uses an in-memory `PubsubArrayAdapter` and a 30 second global timeout.
+
+```typescript
+import { pubsub } from 'functools-kit';
+
+const sendNotification = pubsub(async (message: string) => {
+  const ok = await notificationService.send(message);
+  return ok; // true = delivered, false = retry
+});
+
+await sendNotification('Hello, world!');
+```
+
+Messages sent before the previous one resolves are queued and processed in order. You never need to worry about concurrent calls racing against each other.
+
+---
+
+## Lifecycle hooks
+
+Lifecycle hooks let you observe every stage of message processing without modifying the emitter itself. All hooks receive the original `data` value.
+
+```typescript
+import { pubsub } from 'functools-kit';
+
+interface JobPayload {
+  jobId: string;
+  input: string;
+}
+
+const processJob = pubsub<JobPayload>(
+  async ({ jobId, input }) => {
+    const result = await runJob(jobId, input);
+    return result.success;
+  },
+  {
+    onBegin: ({ jobId }) => {
+      console.log(`[${jobId}] queued`);
+    },
+    onProcess: ({ jobId }) => {
+      console.log(`[${jobId}] picked up by worker`);
+    },
+    onEnd: ({ jobId }) => {
+      console.log(`[${jobId}] completed successfully`);
+    },
+    onError: ({ jobId }, error) => {
+      console.error(`[${jobId}] error:`, error);
+    },
+    onDestroy: async (queue) => {
+      console.warn('Queue timed out. Remaining items:', await queue.length());
+    },
+  }
+);
+
+await processJob({ jobId: 'j1', input: 'data' });
+```
+
+<Note>
+  `onError` fires when the emitter **throws**. It does not fire when the emitter returns `false` — that is the normal retry signal. Use `onError` for unexpected exceptions; use the `false` return for expected transient failures.
+</Note>
+
+---
+
+## Retry-on-false behaviour
+
+When the emitter returns `false`, `pubsub` waits 1 second and retries the same message from the front of the queue. The global `timeout` option (default 30 000 ms) measures the time since the last successful delivery. If that window expires without any success, `onDestroy` is called and the wrapped function becomes a no-op for all future calls.
+
+```typescript
+import { pubsub } from 'functools-kit';
+
+const push = pubsub(
+  async (payload: string) => {
+    const delivered = await unreliableService.push(payload);
+    return delivered; // Automatically retried if false.
+  },
+  {
+    timeout: 10_000, // Give up after 10 seconds of no successful delivery.
+    onDestroy: async () => {
+      console.error('Delivery queue stopped — service appears down.');
+    },
+  }
+);
+```
+
+To stop the queue manually before the timeout fires, call `.stop()`:
+
+```typescript
+await push.stop();
+// All pending messages are cleared and the queue is permanently stopped.
+```
+
+---
+
+## PubsubArrayAdapter
+
+`PubsubArrayAdapter<T>` is the default in-memory queue. It wraps a plain JavaScript array and exposes the `IPubsubArray<T>` interface. An optional `maxItems` constructor argument caps the queue size by discarding the oldest entries when the limit is exceeded.
+
+```typescript
+export class PubsubArrayAdapter<T = any> implements IPubsubArray<T> {
+  constructor(maxItems?: number);        // Default: Infinity
+
+  length():         Promise<number>;
+  push(value: T):  Promise<void>;
+  shift():         Promise<T | null>;
+  getFirst():      Promise<T | null>;
+  clear():         Promise<void>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<T>;
+}
+```
+
+```typescript
+import { pubsub, PubsubArrayAdapter } from 'functools-kit';
+
+// Cap the queue at 100 messages; oldest are dropped when the limit is hit.
+const sendEvent = pubsub(
+  async (event: AnalyticsEvent) => {
+    return await analytics.track(event);
+  },
+  {
+    queue: new PubsubArrayAdapter(100),
+  }
+);
+```
+
+---
+
+## PubsubMapAdapter
+
+`PubsubMapAdapter<T>` is an in-memory queue backed by a `Map`. Unlike the array adapter, it deduplicates entries by key — if you push a message with the same ID twice, the second write overwrites the first. Use it when idempotency matters and you want the latest value for a given key to be the one delivered.
+
+```typescript
+export class PubsubMapAdapter<T = any> implements IPubsubMap<T> {
+  clear():                        Promise<void>;
+  size():                         Promise<number>;
+  set(key: string, value: T):    Promise<void>;
+  get(key: string):              Promise<T | null>;
+  delete(key: string):           Promise<void>;
+  getFirst():                    Promise<[string, T] | null>;
+  shift():                       Promise<[string, T] | null>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<[string, T]>;
+}
+```
+
+To use `PubsubMapAdapter` with `pubsub`, wrap it with the `pubsub.fromMap` adapter — this converts the map interface into the `IPubsubArray` shape the queue expects:
+
+```typescript
+import { pubsub, PubsubMapAdapter } from 'functools-kit';
+
+const deduplicatedPush = pubsub(
+  async (update: { userId: string; status: string }) => {
+    return await sendStatusUpdate(update);
+  },
+  {
+    // pubsub.fromMap adapts IPubsubMap → IPubsubArray
+    queue: pubsub.fromMap(new PubsubMapAdapter()),
+  }
+);
+
+// If the same userId is queued twice before delivery, only the last write survives.
+deduplicatedPush({ userId: 'u1', status: 'online' });
+deduplicatedPush({ userId: 'u1', status: 'away' }); // Overwrites the previous entry for 'u1'.
+```
+
+---
+
+## Choosing an adapter
+
+Both adapters satisfy `IPubsubArray` (via `pubsub.fromMap` for the map variant) and are interchangeable from `pubsub`'s perspective. The choice comes down to your delivery semantics:
+
+| | `PubsubArrayAdapter` | `PubsubMapAdapter` |
+|---|---|---|
+| Ordering | FIFO by insertion order | FIFO by insertion order |
+| Duplicates | All messages delivered | Later write replaces earlier one for the same key |
+| Capacity cap | `maxItems` constructor arg | Unbounded (one entry per key) |
+| Best for | Event logs, ordered tasks | State sync, presence updates |
+
+---
+
+## IPubsubArray interface
+
+If neither built-in adapter fits — for example, you need a Redis-backed queue for multi-process scenarios — implement `IPubsubArray<T>` directly:
+
+```typescript
+export interface IPubsubArray<T = any> {
+  getFirst(): Promise<T | null>;
+  push(value: T): Promise<void>;
+  shift(): Promise<T | null>;
+  length(): Promise<number>;
+  clear(): Promise<void>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<T>;
+}
+```
+
+Pass your implementation as `queue` in the config and `pubsub` will use it transparently.

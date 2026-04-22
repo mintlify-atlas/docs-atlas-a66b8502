@@ -1,0 +1,254 @@
+---
+title: "Iterating documents with async generators"
+description: "Use functools-kit's iterateDocuments, iterateUnion, iterateList, and iteratePromise to process large datasets via async generators with filtering and mapping."
+---
+
+functools-kit's iteration utilities let you consume large datasets lazily — page by page, item by item — without loading everything into memory at once. Each function returns an `AsyncGenerator`, which means you can stream documents through a pipeline of transforms, filters, and paginators rather than building a giant intermediate array. This page covers the four iterator primitives: `iterateDocuments`, `iterateList`, `iterateUnion`, and `iteratePromise`.
+
+## IRowData and RowId
+
+Before diving into the iterators, it helps to understand the two base types that appear throughout the API.
+
+`IRowData` is the minimal shape every row in a dataset must satisfy. It carries a single `id` field used for deduplication and cursor tracking. `RowId` is the union of `string | number` — any value that uniquely identifies a row.
+
+```typescript
+export interface IRowData {
+  id: RowId;
+}
+
+export type RowId = string | number;
+```
+
+Every iterator function defaults to `Data = IRowData`, so you can pass your own type parameter when your rows carry extra fields.
+
+---
+
+## iterateDocuments
+
+`iterateDocuments` is the workhorse iterator. It fetches documents in pages from an arbitrary async data source, yielding each page as a `Data[]` chunk. Under the hood it fires the next request while the caller is still processing the previous batch, so there is no idle time between pages.
+
+### Type signature
+
+```typescript
+interface IConfig<Data = IRowData> {
+  totalDocuments?: number;  // Maximum documents to iterate. Default: 10_000
+  limit?: number;           // Page size per request. Default: 5_000
+  delay?: number;           // Milliseconds to wait between requests. Default: 100
+  getId?: (data: Data) => RowId;
+  createRequest: (args: {
+    limit: number;
+    offset: number;
+    page: number;
+    lastId: RowId | null;
+  } & Omit<IConfig<Data>, 'createRequest'>) => Data[] | Promise<Data[]>;
+}
+
+export const iterateDocuments: <Data = IRowData>(
+  config: IConfig<Data>
+) => AsyncGenerator<Data[], void, unknown>;
+```
+
+The `createRequest` callback receives both offset-based fields (`offset`, `page`) and a cursor field (`lastId`) on every call, so you can implement either pagination strategy inside the same function. The generator stops early if a response is shorter than `limit`, signalling that the source has no more data.
+
+### Offset-based pagination
+
+Use `offset` and `page` when your backend supports `LIMIT`/`OFFSET` queries.
+
+```typescript
+import { iterateDocuments } from 'functools-kit';
+
+interface Order {
+  id: number;
+  status: string;
+  total: number;
+}
+
+const orderStream = iterateDocuments<Order>({
+  totalDocuments: 50_000,
+  limit: 1_000,
+  delay: 50,
+  createRequest: async ({ limit, offset }) => {
+    const res = await fetch(`/api/orders?limit=${limit}&offset=${offset}`);
+    return res.json();
+  },
+});
+
+for await (const page of orderStream) {
+  console.log(`Processing ${page.length} orders`);
+}
+```
+
+### Cursor-based pagination
+
+Use `lastId` when your backend supports keyset/cursor pagination, which avoids the performance cliff of large offsets.
+
+```typescript
+import { iterateDocuments } from 'functools-kit';
+
+interface Message {
+  id: string;
+  body: string;
+  createdAt: string;
+}
+
+const messageStream = iterateDocuments<Message>({
+  totalDocuments: 100_000,
+  limit: 500,
+  createRequest: async ({ limit, lastId }) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (lastId) params.set('after', String(lastId));
+    const res = await fetch(`/api/messages?${params}`);
+    return res.json();
+  },
+});
+
+for await (const page of messageStream) {
+  await savePageToDatabase(page);
+}
+```
+
+<Warning>
+  `iterateDocuments` throws if a page response contains more items than `limit`. Your API must respect the requested page size.
+</Warning>
+
+---
+
+## iterateList
+
+`iterateList` turns an in-memory array into an `AsyncGenerator` that yields items one at a time, optionally transforming each row through an async `map` function. It is the simplest entry point when your data is already loaded — for example, a static fixture or a small lookup table.
+
+### Type signature
+
+```typescript
+export async function* iterateList<T = IRowData>(
+  rows: T[],
+  map?: (row: T) => Promise<T>
+): AsyncGenerator<T, void, unknown>;
+```
+
+### Example
+
+```typescript
+import { iterateList } from 'functools-kit';
+
+interface Product {
+  id: number;
+  slug: string;
+  price: number;
+}
+
+const products: Product[] = await fetchAllProducts();
+
+// Yield items one at a time, enriching each with live stock data.
+const enriched = iterateList(products, async (product) => {
+  const stock = await fetchStock(product.id);
+  return { ...product, stock };
+});
+
+for await (const product of enriched) {
+  console.log(product.slug, product.stock);
+}
+```
+
+---
+
+## iterateUnion
+
+`iterateUnion` merges multiple async generators into one, deduplicating rows by their `id`. It accepts an array of generators that may yield either individual items (`Data`) or batches (`Data[]`) and returns a factory that produces a new generator scoped to a given `limit` and `offset`. This makes it straightforward to build paginated views over merged data sources.
+
+### Type signature
+
+```typescript
+export const iterateUnion: <Data = IRowData>(
+  iterators: AsyncGenerator<Data | Data[], void, unknown>[],
+  getId?: (data: Data) => RowId
+) => (limit: number, offset: number) => AsyncGenerator<Data, void, unknown>;
+```
+
+### Example: merging two search indices
+
+```typescript
+import { iterateDocuments, iterateUnion } from 'functools-kit';
+
+interface Article {
+  id: string;
+  title: string;
+  source: string;
+}
+
+const blogStream = iterateDocuments<Article>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/blog?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const newsStream = iterateDocuments<Article>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/news?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const merged = iterateUnion<Article>([blogStream, newsStream]);
+
+// Get the second page of 20 merged, deduplicated articles.
+const page2 = merged(20, 20);
+for await (const article of page2) {
+  console.log(article.title, article.source);
+}
+```
+
+<Note>
+  `iterateUnion` tracks seen IDs in a `Set` and skips any row whose ID has already been yielded, even if it came from a different generator.
+</Note>
+
+---
+
+## iteratePromise
+
+`iteratePromise` wraps a single async function that returns an array and yields each element individually. It is useful when you have a one-shot batch fetch (for example, an RPC call or a search query) and want to feed the results into the rest of the streaming pipeline.
+
+### Type signature
+
+```typescript
+export async function* iteratePromise<Data = IRowData>(
+  fn: () => Promise<Data[]>
+): AsyncGenerator<Data, void, unknown>;
+```
+
+### Example
+
+```typescript
+import { iteratePromise, filterDocuments, resolveDocuments } from 'functools-kit';
+
+interface User {
+  id: number;
+  role: string;
+  email: string;
+}
+
+const adminStream = iteratePromise<User>(
+  () => fetch('/api/users').then(r => r.json())
+);
+
+const admins = filterDocuments(adminStream, (user) => user.role === 'admin');
+const result = await resolveDocuments(admins);
+
+console.log(`Found ${result.length} admins`);
+```
+
+---
+
+## Choosing the right iterator
+
+<CardGroup cols={2}>
+  <Card title="iterateDocuments" icon="database">
+    Use when your data lives in a paginated API or database. Handles offset and cursor strategies, prefetches the next page, and enforces a total document cap.
+  </Card>
+  <Card title="iterateList" icon="list">
+    Use when your data is already in memory as an array. Optionally transform each item with an async map function before yielding it downstream.
+  </Card>
+  <Card title="iterateUnion" icon="code-merge">
+    Use when you need to merge and deduplicate rows from multiple generators into a single paginated stream.
+  </Card>
+  <Card title="iteratePromise" icon="bolt">
+    Use when you have a single async function that returns an array and you want to feed its results into the generator pipeline one item at a time.
+  </Card>
+</CardGroup>

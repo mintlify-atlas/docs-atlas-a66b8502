@@ -1,0 +1,175 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "functools-kit",
+  "projectDescription": "A lightweight TypeScript utility library providing async control flow, reactive streams, smart caching, pub/sub messaging, and functional programming helpers for backend and full-stack development.",
+  "theme": "luma",
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Async Control Flow",
+            "pages": [
+              "guides/async-basics",
+              "guides/cancelable",
+              "guides/queued-execpool",
+              "guides/retry-timeout"
+            ]
+          },
+          {
+            "group": "Reactive Programming",
+            "pages": [
+              "guides/observer-subject",
+              "guides/source-operators",
+              "guides/pubsub"
+            ]
+          },
+          {
+            "group": "Caching & Rate Limiting",
+            "pages": [
+              "guides/memoize-cached",
+              "guides/ttl-router",
+              "guides/rate-limiting"
+            ]
+          },
+          {
+            "group": "Data & Iteration",
+            "pages": [
+              "guides/document-iteration",
+              "guides/pagination",
+              "guides/data-structures"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Async HOFs",
+            "pages": [
+              "api/cancelable",
+              "api/queued",
+              "api/execpool",
+              "api/retry",
+              "api/lock",
+              "api/singlerun",
+              "api/afterinit",
+              "api/schedule",
+              "api/timeout",
+              "api/obsolete"
+            ]
+          },
+          {
+            "group": "Caching",
+            "pages": [
+              "api/memoize",
+              "api/cached",
+              "api/ttl",
+              "api/router",
+              "api/rate"
+            ]
+          },
+          {
+            "group": "Reactive",
+            "pages": [
+              "api/observer",
+              "api/subject",
+              "api/behavior-subject",
+              "api/source",
+              "api/operator"
+            ]
+          },
+          {
+            "group": "Utilities & Helpers",
+            "pages": [
+              "api/functional-helpers",
+              "api/string-array",
+              "api/object-utils",
+              "api/data-structures"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Async control flow HOFs: cancelable, queued, execpool, retry, lock, singlerun, afterinit, schedule, timeout",
+    "Reactive streams: Observer, Subject, BehaviorSubject, Source factory, and Operator transformers",
+    "Smart caching: memoize, cached, ttl (time-to-live), router (per-key), and rate limiting",
+    "Pub/Sub messaging with pluggable async queue and map adapters (PubsubArrayAdapter, PubsubMapAdapter)",
+    "Async generator-based document iteration: iterateDocuments, iterateUnion, iterateList with offset/cursor pagination",
+    "Functional helpers: compose, match, and, or, not, first, last, join, truely, str, has",
+    "Specialized data structures: SortedArray, LimitedSet, LimitedMap, ToolRegistry, Lock",
+    "Object utilities: deepClone, deepCompare, deepMerge, deepFlat, get, set, create",
+    "Type-safe TypeScript API with full generics support",
+    "761 tests covering correctness, async exception propagation, and integration chains"
+  ],
+  "publicApiSurface": [
+    "cancelable(fn) — wrap async function with cancellation support",
+    "queued(fn) — serialize async calls into a promise queue",
+    "execpool(fn, { maxExec, delay }) — limit concurrent async executions",
+    "retry(fn, { retries, delay }) — retry on failure",
+    "lock(fn) — mutex for async functions",
+    "singlerun(fn) — run only once until cleared",
+    "afterinit(fn) — skip calls until first run completes",
+    "schedule(fn, params) — defer execution with scheduler callback",
+    "timeout(fn, ms) — wrap with timeout, returns TIMEOUT_SYMBOL",
+    "memoize(fn, keyFn) — cache by key function",
+    "cached(fn) — cache by argument change detection",
+    "ttl(fn, { key, timeout }) — time-to-live cache",
+    "router(keyFn, invalidateFn, fn) — per-key cached memoization",
+    "rate(fn, { key, rate }) — rate limiting by key",
+    "debounce(fn, ms) — debounce function calls",
+    "throttle(fn, ms) — throttle function calls",
+    "singletick(fn) — coalesce calls per event loop tick",
+    "singleshot(fn) — run once with memoized result",
+    "trycatch(fn, fallback) — try-catch wrapper with fallback",
+    "pubsub(config) — pub/sub with PubsubArrayAdapter / PubsubMapAdapter",
+    "Observer — full observable implementation with operators",
+    "Subject — observable + subscriber",
+    "BehaviorSubject — Subject with current value replay",
+    "Source — factory: fromArray, fromPromise, fromInterval, fromSubject, merge, join, pipe",
+    "Operator — stream transforms: take, skip, distinct, group, pair, strideTricks, liveness, count",
+    "waitForNext(subject, predicate) — await subject value matching condition",
+    "iterateDocuments(paginator, options) — async generator with offset/cursor pagination",
+    "iterateUnion(sources, options) — merge + dedup async generators",
+    "iterateList(list, mapFn) — iterate list with async map",
+    "paginateDocuments(generator, options) — paginate async document generators",
+    "filterDocuments(generator, predicate) — async filter over document generators",
+    "mapDocuments(generator, transform) — async map over document generators",
+    "pickDocuments(generator, { limit, offset }) — offset-based pick",
+    "distinctDocuments(generator, getId) — dedup by id",
+    "fetchApi(url, options) — typed fetch wrapper with FetchError",
+    "compose(...fns) — right-to-left function composition",
+    "match(condition, run) — conditional execution helper",
+    "and(...fns) / or(...fns) / not(fn) — boolean combinators (sync + async)",
+    "has(collection, value) — membership check for Array/Set/Map",
+    "first(arr) / last(arr) — safe first/last element",
+    "join(...arrays) — merge arrays with dedup and null removal",
+    "str(...parts) — join strings with separators",
+    "truely(arr) — filter nulls from array",
+    "Lock — class-based mutex: acquireLock / releaseLock",
+    "SortedArray — array sorted by numeric score",
+    "LimitedSet / LimitedMap — size-capped Set and Map",
+    "ToolRegistry — type-safe runtime registry",
+    "deepClone / deepCompare / deepMerge / deepFlat — object utilities",
+    "get(obj, path) / set(obj, path, value) / create(path, value) — path-based object access",
+    "sleep(ms) — promise-based delay",
+    "createAwaiter() — promise with external resolve/reject",
+    "randomString() — generate UUID-like random string",
+    "typo — typography constants (nbsp, emdash, etc.)"
+  ]
+}

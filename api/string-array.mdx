@@ -1,0 +1,134 @@
+---
+title: "String and array helpers: str, join, split, has, truely"
+description: "functools-kit string and array helpers: str for separator-joined strings, join with dedup, split for tokenizing, truely to filter nulls, has, first, and last."
+---
+
+functools-kit provides a small set of string and array helpers designed for the patterns that come up repeatedly in backend and full-stack TypeScript: merging arrays without duplicates, building strings from nullable parts, and safely accessing array elements.
+
+## str
+
+Join string parts with a configurable separator. Filters out null and undefined values automatically.
+
+```typescript
+export const str = (...parts: (string | null | undefined)[]) => ({
+  space(): string;
+  newline(): string;
+  comma(): string;
+  dot(): string;
+  semicolon(): string;
+  table(): string;
+})
+```
+
+```typescript
+import { str } from "functools-kit";
+
+str("Hello", null, "World").space();   // "Hello World"
+str("a", "b", "c").comma();           // "a, b, c"
+str("line1", undefined, "line2").newline(); // "line1\nline2"
+```
+
+## join
+
+Merge multiple arrays into one, removing duplicates and null/undefined values.
+
+```typescript
+export const join = <T>(...arrays: (T | T[] | null | undefined)[]): T[]
+```
+
+```typescript
+import { join } from "functools-kit";
+
+join([1, 2, 3], [2, 3, 4], null, 5); // [1, 2, 3, 4, 5]
+```
+
+## split
+
+Split a string by common separators (underscore, dash, space) into lowercase tokens.
+
+```typescript
+export const split = (value: string): string[]
+```
+
+```typescript
+import { split } from "functools-kit";
+
+split("hello_world");    // ["hello", "world"]
+split("my-component");   // ["my", "component"]
+split("foo bar");        // ["foo", "bar"]
+```
+
+## truely
+
+Filter null and undefined values from an array, returning only truthy items.
+
+```typescript
+export const truely = <T>(arr: (T | null | undefined)[]): T[]
+```
+
+```typescript
+import { truely } from "functools-kit";
+
+truely([1, null, 2, undefined, 3]); // [1, 2, 3]
+```
+
+## has
+
+Check membership in an Array, Set, or Map. Handles null safely.
+
+```typescript
+export const has = <T>(
+  collection: T[] | Set<T> | Map<T, any> | null | undefined,
+  ...values: T[]
+): boolean
+```
+
+```typescript
+import { has } from "functools-kit";
+
+has([1, 2, 3], 2);             // true
+has(new Set(["a", "b"]), "c"); // false
+has(new Map([["x", 1]]), "x"); // true
+has(null, "anything");         // false
+
+// Check if ANY value matches
+has([1, 2, 3], 4, 2); // true (2 is present)
+```
+
+## first / last
+
+Safe accessor for the first or last element of an array. Returns `undefined` for empty or null arrays — never throws.
+
+```typescript
+export const first = <T>(arr: T[] | null | undefined): T | undefined
+export const last  = <T>(arr: T[] | null | undefined): T | undefined
+```
+
+```typescript
+import { first, last } from "functools-kit";
+
+first([10, 20, 30]); // 10
+last([10, 20, 30]);  // 30
+first([]);           // undefined
+last(null);          // undefined
+```
+
+## typo
+
+Typography constants for use in string templates.
+
+```typescript
+import { typo } from "functools-kit";
+
+typo.nbsp;       // non-breaking space
+typo.thinsp;     // thin space
+typo.emdash;     // —
+typo.endash;     // –
+typo.bullet;     // •
+typo.terminator; // .
+```
+
+## Related
+
+- [Functional helpers](/api/functional-helpers) — compose, match, and/or/not
+- [Object utilities](/api/object-utils) — deepClone, get, set, deepMerge

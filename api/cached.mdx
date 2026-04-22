@@ -1,0 +1,60 @@
+---
+title: "cached — cache by argument change detection"
+description: "cached returns the previous result when a custom comparator says arguments are unchanged — a single-slot cache that avoids redundant recomputation."
+---
+
+`cached` is a single-slot cache: it stores the last call's arguments and result, and returns the cached result if the `changed` comparator says the arguments haven't changed since the last call. Unlike `memoize`, there is no key function — it simply tracks whether anything changed. Failed promises auto-clear the cache.
+
+## Signature
+
+```typescript
+export interface IClearableCached {
+  clear: () => void;
+}
+
+export const cached = <T extends (...args: any[]) => any>(
+  changed: (prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean,
+  run: T
+): T & IClearableCached
+```
+
+## Parameters
+
+<ParamField path="changed" type="(prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean" required>
+  A comparator that returns `true` when the arguments have changed and the function should re-run, `false` to return the cached value.
+</ParamField>
+
+<ParamField path="run" type="T" required>
+  The function to cache.
+</ParamField>
+
+## Return value
+
+Returns the wrapped function with `.clear()` appended. Calling `.clear()` resets the cache so the next call always re-executes.
+
+## Example
+
+```typescript
+import { cached } from "functools-kit";
+
+const processConfig = cached(
+  (prev, curr) => prev[0].version !== curr[0].version,
+  async (config: { version: number; data: any }) => {
+    return expensiveTransform(config.data);
+  }
+);
+
+// First call always runs
+await processConfig({ version: 1, data: rawData });
+
+// Same version — returns cached result
+await processConfig({ version: 1, data: rawData });
+
+// Version changed — re-executes
+await processConfig({ version: 2, data: newData });
+```
+
+## Related
+
+- [memoize](/api/memoize) — multi-key cache with key function
+- [ttl](/api/ttl) — cache with time-to-live expiry

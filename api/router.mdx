@@ -1,0 +1,71 @@
+---
+title: "router — per-key memoization with invalidation"
+description: "router assigns each unique key its own cache slot, then uses a change-detection function to decide whether to re-execute — preventing cross-key state leaks."
+---
+
+`router` is designed for scenarios where you have multiple independent entities (e.g. camera feeds, user sessions) that each need their own cached state, but you don't want those caches to interfere with each other or leak memory. Each unique key gets an isolated cache slot with its own last-args/last-value pair and custom change detection.
+
+## Signature
+
+```typescript
+export interface IClearableRouter<K = string> {
+  clear: (key?: K) => void;
+}
+
+export const router = <T extends (...args: any[]) => any, K = string>(
+  key: (args: Parameters<T>) => K,
+  changed: (prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean,
+  run: T
+): T & IClearableRouter<K>
+```
+
+## Parameters
+
+<ParamField path="key" type="(args: Parameters<T>) => K" required>
+  Extracts the routing key from the call arguments. Each unique key maintains its own independent cache.
+</ParamField>
+
+<ParamField path="changed" type="(prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean" required>
+  Returns `true` when arguments changed for a given key and `run` should re-execute. Returns `false` to return the cached value.
+</ParamField>
+
+<ParamField path="run" type="T" required>
+  The function to cache per key.
+</ParamField>
+
+## Return value
+
+Returns the wrapped function with `.clear(key?)` — evict one key's cache or all keys.
+
+## Example
+
+```typescript
+import { router } from "functools-kit";
+
+// Cache camera processing results per cameraId,
+// invalidating when the cacheKey changes
+const processCamera = router<
+  (cameraId: number, cacheKey: string) => Promise<void>,
+  number
+>(
+  ([cameraId]) => cameraId,
+  ([, prevKey], [, currKey]) => prevKey !== currKey,
+  async (cameraId, cacheKey) => {
+    await runCameraProcessing(cameraId);
+  }
+);
+
+await processCamera(1, "key-a"); // runs
+await processCamera(1, "key-a"); // cached (same key, no change)
+await processCamera(1, "key-b"); // re-runs (cacheKey changed)
+await processCamera(2, "key-a"); // runs (different cameraId)
+
+// Clear cache for camera 1 only
+processCamera.clear(1);
+```
+
+## Related
+
+- [memoize](/api/memoize) — global key-function caching
+- [cached](/api/cached) — single-slot change-detection caching
+- [ttl](/api/ttl) — time-expiring cache

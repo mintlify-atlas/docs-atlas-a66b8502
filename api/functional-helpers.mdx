@@ -1,0 +1,227 @@
+---
+title: "Functional helpers: compose, match, and, or, not, trycatch"
+description: "Compose functions right-to-left, combine sync/async booleans with and/or/not, branch logic with match, and handle errors gracefully using trycatch."
+---
+
+functools-kit includes a set of functional programming primitives that work with both synchronous values and Promises. These helpers let you build declarative logic pipelines without verbose if/else chains or nested try/catch blocks.
+
+## compose
+
+Right-to-left function composition. The last function receives the original argument; each result flows left into the next function.
+
+```typescript
+export const compose = (...funcs: Function[]) => Function
+```
+
+```typescript
+import { compose } from "functools-kit";
+
+const transform = compose(
+  (x: number) => x * 2,
+  (x: number) => x + 1,
+  (x: number) => x ** 2
+);
+
+console.log(transform(3)); // ((3²) + 1) * 2 = 20
+```
+
+## and / or / not
+
+Boolean combinators that work transparently with both plain values and Promises.
+
+```typescript
+export const and = <T = Promise<boolean>>(...args: T[]): T
+export const or  = <T = Promise<boolean>>(...args: T[]): T
+export const not = <T = Promise<boolean>>(arg: T): T
+```
+
+```typescript
+import { and, or, not } from "functools-kit";
+
+// Sync
+and(true, 1, "non-empty");  // true
+or(false, 0, "");           // false
+not(true);                  // false
+
+// Async — works the same way
+const result = await and(
+  Promise.resolve(true),
+  Promise.resolve(1)
+); // true
+```
+
+## match
+
+Conditional branching that supports both sync and async conditions, run values, and fallbacks.
+
+```typescript
+export const match = <A, T, E = false>({
+  condition,
+  run,
+  not,
+}: {
+  condition: A | (() => A);
+  run: T | (() => T);
+  not?: E | (() => E);
+}): A | T | E
+```
+
+```typescript
+import { match } from "functools-kit";
+
+const result = match({
+  condition: user.isAdmin,
+  run: () => fetchAdminData(),
+  not: () => fetchUserData(),
+});
+
+// Async conditions work too
+const asyncResult = await match({
+  condition: checkPermission(),   // Promise<boolean>
+  run: () => performAction(),
+  not: false,
+});
+```
+
+## trycatch
+
+Wraps any function (sync or async) with structured error handling. On failure, calls an optional `fallback` and returns `defaultValue` instead of throwing. `defaultValue` defaults to `CATCH_SYMBOL`.
+
+```typescript
+export const CATCH_SYMBOL: unique symbol;
+
+export interface IControllTrycatch<DefaultValue = typeof CATCH_SYMBOL, Params extends unknown[] = any[]> {
+  allowedErrors?: { new(): Error }[];
+  fallback?: (error: Error, ...args: Params) => void;
+  defaultValue: DefaultValue;
+}
+
+export const trycatch = <T extends (...args: any[]) => any, V, D = typeof CATCH_SYMBOL>(
+  run: T,
+  config?: Partial<IControllTrycatch<D, Parameters<T>>>
+): (...args: Parameters<T>) => ReturnType<T> | D
+```
+
+```typescript
+import { trycatch, CATCH_SYMBOL } from "functools-kit";
+
+// Async — returns null on error
+const safeLoad = trycatch(
+  async (id: string) => loadRecord(id),
+  {
+    fallback: (err) => console.error("Failed:", err.message),
+    defaultValue: null,
+  }
+);
+
+const result = await safeLoad("rec-1"); // null on failure
+
+// Sync — returns CATCH_SYMBOL if no defaultValue provided
+const safeParse = trycatch(JSON.parse);
+const parsed = safeParse("invalid json"); // CATCH_SYMBOL
+
+// Only catch specific error types
+const safe = trycatch(riskyOp, {
+  allowedErrors: [NetworkError],
+  defaultValue: null,
+});
+```
+
+## sleep / createAwaiter
+
+```typescript
+export const sleep = (timeout: number): Promise<void>
+
+export interface IAwaiter<T> {
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: any): void;
+}
+
+// Returns a [promise, awaiter] tuple
+export const createAwaiter = <T extends unknown>(): [Promise<T>, IAwaiter<T>]
+```
+
+```typescript
+import { sleep, createAwaiter } from "functools-kit";
+
+await sleep(500); // wait 500ms
+
+// Create a promise you resolve/reject externally
+const [promise, { resolve, reject }] = createAwaiter<string>();
+setTimeout(() => resolve("done"), 1000);
+const value = await promise; // "done"
+```
+
+## fetchApi / FetchError
+
+A typed fetch wrapper that automatically sets `Content-Type: application/json` for POST/PUT/PATCH requests and throws `FetchError` (not the raw `Response`) on non-OK responses.
+
+```typescript
+export class FetchError extends Error {
+  constructor(
+    readonly originalError: any,
+    readonly request: RequestInfo,
+    readonly response: Response | undefined,
+    readonly statusCode: number,
+    readonly info?: RequestInfo | URL | null,
+    readonly init?: RequestInit | null
+  )
+}
+
+export const fetchApi: <T = any>(
+  input: string | URL | Request,
+  init?: RequestInit
+) => Promise<T>
+
+// Global config
+fetchApi.config({ useSymbolException: boolean }): void
+```
+
+```typescript
+import { fetchApi, FetchError } from "functools-kit";
+
+try {
+  const user = await fetchApi<User>("/api/users/123");
+  console.log(user.name);
+} catch (err) {
+  if (err instanceof FetchError) {
+    console.error("HTTP", err.statusCode, err.message);
+  }
+}
+
+// POST — Content-Type: application/json set automatically
+const created = await fetchApi<User>("/api/users", {
+  method: "POST",
+  body: JSON.stringify({ name: "Alice" }),
+});
+```
+
+<Note>
+  Set `fetchApi.config({ useSymbolException: true })` to return `CATCH_SYMBOL` instead of throwing `FetchError` on non-OK responses.
+</Note>
+
+## makeExtendable
+
+A utility that makes a class safely extendable without relying on `new.target` being set by the caller — useful for decorating classes that need to be subclassed in environments where `Reflect.construct` is available.
+
+```typescript
+export const makeExtendable = <T extends new (...args: any[]) => any>(BaseClass: T): T
+```
+
+```typescript
+import { makeExtendable, Subject } from "functools-kit";
+
+const ExtendableSubject = makeExtendable(Subject);
+
+class MySubject<T> extends ExtendableSubject<T> {
+  log(value: T) {
+    console.log("emitting:", value);
+    this.next(value);
+  }
+}
+```
+
+## Related
+
+- [String & array helpers](/api/string-array)
+- [Object utilities](/api/object-utils)

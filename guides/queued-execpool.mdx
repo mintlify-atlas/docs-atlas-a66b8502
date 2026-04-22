@@ -1,0 +1,220 @@
+---
+title: "Serialising and pooling async calls"
+description: "How to use queued, execpool, and lock to control concurrency — serialise calls one-at-a-time, cap parallel workers, or suspend execution behind a manual lock."
+---
+
+Uncontrolled concurrency is one of the most common sources of hard-to-reproduce bugs: a slow first call overlaps a fast second call, state is overwritten out of order, and the user sees a flicker or an inconsistent result. functools-kit's `queued`, `execpool`, and `lock` HOFs give you three distinct levers to manage this.
+
+## queued
+
+`queued` serialises all calls to an async function so that only one runs at a time. If a second call arrives while the first is still pending, it is chained onto the end of the promise queue and executes after the first settles.
+
+### Type signature
+
+```typescript
+import { CANCELED_PROMISE_SYMBOL } from './cancelable';
+
+export interface IWrappedQueuedFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    clear(): void;   // Reset the queue to resolved state without cancelling.
+    cancel(): void;  // Cancel all pending calls and reset the queue.
+}
+
+export const queued: <T = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedQueuedFn<T, P>;
+```
+
+### How it works
+
+Internally `queued` maintains a `lastPromise` chain. Each new call appends `.then(runNextCall)` to `lastPromise`, so calls execute strictly in arrival order. The `cancel` method sets an `isCanceled` flag on every pending call and replaces `lastPromise` with `Promise.resolve()`, so any already-queued calls resolve immediately with `CANCELED_PROMISE_SYMBOL`.
+
+### Example: serialised form saves
+
+```typescript
+import { queued, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const saveForm = queued(async (data: FormData) => {
+    const res = await fetch('/api/form', { method: 'POST', body: data });
+    return res.json();
+});
+
+// Multiple rapid submits are executed one after another, never in parallel.
+saveForm(firstData);
+saveForm(secondData);
+
+// Cancel everything still in the queue (e.g. user navigates away).
+saveForm.cancel();
+```
+
+<Note>
+  After `.clear()`, the queue is reset to a resolved state but in-flight calls continue to run. After `.cancel()`, both in-flight and pending calls resolve with `CANCELED_PROMISE_SYMBOL`.
+</Note>
+
+---
+
+## execpool
+
+`execpool` allows up to `maxExec` concurrent executions. When that limit is reached, new calls join an internal stack and execute as slots become free. Unlike `queued`, independent calls do run in parallel — you are just capping the width of that parallelism.
+
+### Type signature
+
+```typescript
+interface IConfig {
+    maxExec: number;  // Default: 3
+    delay: number;    // Polling delay in ms while waiting for a free slot. Default: 10
+}
+
+export interface IWrappedExecpoolFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T>;
+    clear(): void; // Drain the pending stack and reset the active execution set.
+}
+
+export const execpool: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    options?: Partial<IConfig>
+) => IWrappedExecpoolFn<T, P>;
+```
+
+### How it works
+
+`execpool` keeps two structures: `execSet` (active promises) and `execStack` (pending calls). When a new call arrives:
+
+- If `execSet.size < maxExec`, it runs immediately.
+- Otherwise it is pushed onto `execStack`, and a `singlerun` loop polls with `Promise.race(execSet)` to detect when a slot opens.
+
+The `delay` option (default `10 ms`) adds a small sleep between slot checks to avoid tight spin-waiting.
+
+### Example: bulk image processing
+
+```typescript
+import { execpool } from 'functools-kit';
+
+const processImage = execpool(
+    async (path: string) => {
+        const buffer = await readFile(path);
+        return compress(buffer);
+    },
+    { maxExec: 4, delay: 0 }
+);
+
+// Kick off 100 compressions; at most 4 run simultaneously.
+const results = await Promise.all(imagePaths.map(processImage));
+```
+
+### Example: rate-limited API client
+
+```typescript
+import { execpool } from 'functools-kit';
+
+const callApi = execpool(
+    async (endpoint: string) => {
+        const res = await fetch(endpoint);
+        return res.json();
+    },
+    { maxExec: 2 } // Honour a 2-concurrent-request limit.
+);
+
+const data = await Promise.all(endpoints.map(callApi));
+```
+
+<Tip>
+  Call `wrappedFn.clear()` to drop all pending calls from the stack without waiting for active ones. Active calls still resolve normally.
+</Tip>
+
+---
+
+## lock
+
+`lock` is a manual mutex for async functions. Calls queue like `queued`, but execution also waits for any active lock to be released. You acquire the lock with `beginLock()` and release it with `endLock()`. This is useful when a critical section spans multiple async steps that are not expressed as a single function call.
+
+### Type signature
+
+```typescript
+export interface IWrappedLockFn<T = any, P extends any[] = any>
+    extends IWrappedQueuedFn<T, P> {
+    beginLock(): void;
+    endLock(): Promise<void>;
+}
+
+export const lock: <T = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedLockFn<T, P>;
+```
+
+`IWrappedLockFn` extends `IWrappedQueuedFn`, so it also has `.clear()` and `.cancel()`.
+
+### How it works
+
+Internally `lock` wraps the target function with `queued`. Before each execution it calls `waitForUnlock()`, which subscribes to a `BehaviorSubject` tracking `lockCount`. `beginLock()` increments `lockCount`; `endLock()` decrements it and then queues a sentinel call with `NEVER_VALUE` to flush the queue once unlocked.
+
+### Example: guarding a database migration
+
+```typescript
+import { lock } from 'functools-kit';
+
+const runQuery = lock(async (sql: string) => {
+    return db.execute(sql);
+});
+
+async function runMigration(steps: string[]) {
+    runQuery.beginLock(); // No queries run while migration is in progress.
+
+    try {
+        for (const sql of steps) {
+            await db.execute(sql); // Direct access during migration.
+        }
+    } finally {
+        await runQuery.endLock(); // Flush queued calls and re-open.
+    }
+}
+
+// These queries queue up but don't execute until the migration finishes.
+runQuery('SELECT * FROM orders');
+runQuery('UPDATE orders SET status = "shipped"');
+```
+
+<Warning>
+  Always call `endLock()` in a `finally` block. If it is never called, all queued calls will wait indefinitely.
+</Warning>
+
+### Example: pause a live data feed
+
+```typescript
+import { lock } from 'functools-kit';
+
+const fetchUpdate = lock(async () => {
+    return fetch('/api/feed/latest').then((r) => r.json());
+});
+
+// Pause while the user edits a form.
+editButton.addEventListener('click', () => fetchUpdate.beginLock());
+
+saveButton.addEventListener('click', async () => {
+    await saveFormData();
+    await fetchUpdate.endLock(); // Resume and flush.
+});
+```
+
+---
+
+## Choosing between the three
+
+<Columns cols={3}>
+  <Card title="queued" icon="list-ordered">
+    One call at a time, in order. Previous call must complete before the next starts. Provides `.cancel()` to drop the whole queue.
+  </Card>
+  <Card title="execpool" icon="layer-group">
+    Up to N calls in parallel. Order not guaranteed. No built-in cancel — call `.clear()` to drain pending work.
+  </Card>
+  <Card title="lock" icon="lock">
+    All calls serialise via `queued`, but also pause on an external signal. You control the gate with `beginLock` / `endLock`.
+  </Card>
+</Columns>
+
+| | queued | execpool | lock |
+|---|---|---|---|
+| Max concurrency | 1 | `maxExec` (default 3) | 1 (plus manual gate) |
+| Order preserved | Yes | No | Yes |
+| Cancel pending | `.cancel()` | `.clear()` | `.cancel()` |
+| Manual pause | No | No | `beginLock()` / `endLock()` |

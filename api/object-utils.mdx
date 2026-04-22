@@ -1,0 +1,146 @@
+---
+title: "Object utilities: deepClone, get, set, deepMerge, and more"
+description: "Deep clone, path-based get/set/create, equality comparison, deep merge, deep flatten, isEmpty, isObject, isUndefined, getErrorMessage, and randomString."
+---
+
+functools-kit ships a collection of everyday object utilities that are used internally and exposed as public exports. All of them are pure functions with no dependencies beyond each other.
+
+## deepClone
+
+Create a shallow-recursive clone of an object. Arrays are shallow-copied; nested objects are recursively cloned.
+
+```typescript
+export const deepClone = (src: any): any
+```
+
+```typescript
+import { deepClone } from "functools-kit";
+
+const original = { a: 1, b: { c: 2 } };
+const clone = deepClone(original);
+clone.b.c = 99;
+console.log(original.b.c); // still 2
+```
+
+## get / set / create
+
+Path-based property accessors. Paths can be dot-separated strings or arrays.
+
+```typescript
+export const get = (object: any, path: string | string[]): any
+export const set = (object: any, path: string | string[], value: any): boolean
+export const create = (path: string | string[], value: any): any
+```
+
+```typescript
+import { get, set, create } from "functools-kit";
+
+const obj = { user: { name: "Alice" } };
+get(obj, "user.name");          // "Alice"
+get(obj, ["user", "name"]);     // "Alice"
+
+set(obj, "user.age", 30);       // true
+console.log(obj.user.age);      // 30
+
+// Create an object from a path
+create("a.b.c", 42); // { a: { b: { c: 42 } } }
+```
+
+## deepCompare
+
+Recursive equality check. Returns `true` if all enumerable own properties match.
+
+```typescript
+export const deepCompare = (a: any, b: any): boolean
+```
+
+```typescript
+import { deepCompare } from "functools-kit";
+
+deepCompare({ x: 1, y: { z: 2 } }, { x: 1, y: { z: 2 } }); // true
+deepCompare({ x: 1 }, { x: 2 });                             // false
+```
+
+## deepMerge
+
+Recursively merge source objects into a target. Later sources override earlier ones; nested objects are merged, not replaced.
+
+```typescript
+export const deepMerge = (target: any, ...sources: any[]): any
+```
+
+```typescript
+import { deepMerge } from "functools-kit";
+
+deepMerge({ a: 1, b: { c: 2 } }, { b: { d: 3 }, e: 4 });
+// { a: 1, b: { c: 2, d: 3 }, e: 4 }
+```
+
+## deepFlat
+
+Recursively flatten nested structures by following a `children` field (or custom field).
+
+```typescript
+export const deepFlat = (items: any[], childKey?: string): any[]
+```
+
+```typescript
+import { deepFlat } from "functools-kit";
+
+const tree = [{ id: 1, children: [{ id: 2 }, { id: 3 }] }];
+deepFlat(tree); // [{ id: 1, children: [...] }, { id: 2 }, { id: 3 }]
+```
+
+## isEmpty / isObject / isUndefined
+
+```typescript
+export const isEmpty = (obj: any): boolean       // true if no own enumerable keys
+export const isObject = (value: any): boolean    // true for plain objects (not arrays, not null)
+export const isUndefined = (value: any): boolean // true for undefined (not null, not 0)
+```
+
+## compareArray / compareFulltext / formatText / randomString
+
+```typescript
+// Shallow array equality
+export const compareArray = (a: any[], b: any[]): boolean
+
+// Match a search string against object fields
+export const compareFulltext = (obj: any, search: string, keys?: string[]): boolean
+
+// Apply a template mask to a string (e.g. phone numbers)
+export const formatText = (value: string, mask?: string, allowedChars?: RegExp): string
+
+// Generate a UUID-like random string
+export const randomString = (): string
+```
+
+```typescript
+import { compareFulltext, formatText, randomString } from "functools-kit";
+
+compareFulltext({ name: "Alice Smith" }, "alice"); // true
+formatText("1234567890", "+# (###) ###-##-##");   // "+1 (234) 567-89-00"
+randomString(); // "a1b2c3d4e5f6..."
+```
+
+## getErrorMessage / errorData
+
+```typescript
+export const getErrorMessage = (error: unknown): string
+export const errorData = (error: unknown): { message: string; stack?: string }
+```
+
+```typescript
+import { getErrorMessage } from "functools-kit";
+
+try {
+  riskyOperation();
+} catch (err) {
+  console.error(getErrorMessage(err)); // always returns a string
+}
+```
+
+## Related
+
+- [Functional helpers](/api/functional-helpers) — compose, match, and/or/not
+- [String & array helpers](/api/string-array) — str, join, has, truely

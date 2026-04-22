@@ -1,0 +1,72 @@
+---
+title: "ttl — time-to-live caching with automatic expiry"
+description: "Add per-key time-to-live caching to any function. Stale entries re-fetch automatically. Use gc() to sweep expired keys and setTimeout() to override per-key TTL."
+---
+
+`ttl` builds on `memoize` to add automatic expiry. Each cache entry records when it was created, and on the next call with the same key, if more than `timeout` milliseconds have passed, the entry is evicted and the function re-runs. This is ideal for caching database lookups or external API calls with a known staleness budget.
+
+## Signature
+
+```typescript
+export interface IClearableTtl<K = string> extends IClearableMemoize<K> {
+  gc: () => void;
+  setTimeout: (key: K, timeout: number) => void;
+}
+
+export const ttl = <T extends (...args: any[]) => any, K = string>(
+  run: T,
+  options?: {
+    key?: (args: Parameters<T>) => K;
+    timeout?: number;
+  }
+): T & IClearableTtl<K> & IControlMemoize<K, ReturnType<T>>
+```
+
+## Parameters
+
+<ParamField path="run" type="T" required>
+  The function whose results should be cached with TTL.
+</ParamField>
+
+<ParamField path="key" type="(args: Parameters<T>) => K">
+  Derives the cache key from call arguments. Defaults to a constant symbol (single shared entry).
+</ParamField>
+
+<ParamField path="timeout" type="number">
+  Milliseconds before an entry expires. Defaults to `250`.
+</ParamField>
+
+## Return value
+
+Returns the wrapped function plus:
+
+- `.clear(key?)` — evict one entry or the whole cache
+- `.gc()` — sweep and evict all expired entries proactively
+- `.setTimeout(key, timeout)` — override the TTL for a specific existing key
+- `.add(key, value)` — manually warm the cache (entry is timestamped as now)
+
+## Example
+
+```typescript
+import { ttl } from "functools-kit";
+
+const getUser = ttl(
+  async (userId: string) => fetchUser(userId),
+  { key: ([id]) => id, timeout: 60_000 }
+);
+
+// Fetches and caches for 60 seconds
+const user = await getUser("u-123");
+
+// Within 60s: returns cached result
+const cached = await getUser("u-123");
+
+// Proactively sweep expired entries
+getUser.gc();
+```
+
+## Related
+
+- [memoize](/api/memoize) — permanent caching by key
+- [router](/api/router) — per-key cache with custom invalidation
+- [rate](/api/rate) — rate limiting by key

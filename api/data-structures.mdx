@@ -1,0 +1,153 @@
+---
+title: "LimitedMap, LimitedSet, SortedArray, ToolRegistry, Lock"
+description: "LRU-bounded LimitedMap and LimitedSet, score-sorted SortedArray, type-safe ToolRegistry for plugin systems, and a class-based Lock mutex from functools-kit."
+---
+
+functools-kit provides five specialized data structures that solve problems the standard `Map`, `Set`, and `Array` don't address out of the box: bounded collections with LRU eviction, sorted storage by score, type-safe plugin registries, and class-based mutual exclusion.
+
+## LimitedMap
+
+A `Map` capped at a maximum size. When the limit is exceeded, the oldest entry is evicted (LRU).
+
+```typescript
+class LimitedMap<K, V> {
+  constructor(maxSize?: number); // default: 20
+  set(key: K, value: V): this;
+  get(key: K): V | undefined;
+  has(key: K): boolean;
+  delete(key: K): boolean;
+  clear(): void;
+  get size(): number;
+}
+```
+
+```typescript
+import { LimitedMap } from "functools-kit";
+
+const cache = new LimitedMap<string, string>(3);
+cache.set("a", "1");
+cache.set("b", "2");
+cache.set("c", "3");
+cache.set("d", "4"); // evicts "a"
+cache.has("a");      // false
+cache.has("d");      // true
+```
+
+## LimitedSet
+
+A `Set` capped at a maximum size with the same LRU eviction behavior.
+
+```typescript
+class LimitedSet<T> {
+  constructor(maxSize?: number); // default: 20
+  add(value: T): this;
+  has(value: T): boolean;
+  delete(value: T): boolean;
+  clear(): void;
+  get size(): number;
+}
+```
+
+```typescript
+import { LimitedSet } from "functools-kit";
+
+const seen = new LimitedSet<string>(100);
+seen.add("event-1");
+seen.has("event-1"); // true — dedup check
+```
+
+## SortedArray
+
+An array that keeps entries sorted by a numeric score in descending order. Supports score-based filtering with `take`.
+
+```typescript
+class SortedArray<T> {
+  constructor(minScore?: number); // minimum score threshold, default: -Infinity
+  push(item: T, score: number): void;
+  pop(item: T): void;
+  take(minScore?: number): T[];
+  getItems(): T[];
+  getEntries(): [T, number][];
+  get length(): number;
+  [Symbol.iterator](): Iterator<T>;
+}
+```
+
+```typescript
+import { SortedArray } from "functools-kit";
+
+const results = new SortedArray<{ id: string }>();
+results.push({ id: "a" }, 0.9);
+results.push({ id: "b" }, 0.5);
+results.push({ id: "c" }, 0.8);
+
+results.getItems(); // [{ id: "a" }, { id: "c" }, { id: "b" }] — sorted by score desc
+results.take(0.7);  // [{ id: "a" }, { id: "c" }] — only items with score >= 0.7
+```
+
+## ToolRegistry
+
+A type-safe, immutable registry for runtime tool or plugin registration. Throws on duplicate registration (unless using `override`). Supports an `init` lifecycle hook.
+
+```typescript
+class ToolRegistry<T extends object> {
+  register<K extends string>(name: K, value: T): ToolRegistry<T & Record<K, T>>;
+  override<K extends string>(name: K, value: Partial<T>): ToolRegistry<T>;
+  get<K extends keyof T>(name: K): T[K];
+  init(): void; // calls .init() on each registered tool if it exists
+}
+```
+
+```typescript
+import { ToolRegistry } from "functools-kit";
+
+interface Tool { execute(): Promise<void>; }
+
+const registry = new ToolRegistry<Tool>()
+  .register("emailSender", { execute: async () => sendEmail() })
+  .register("smsSender",   { execute: async () => sendSms() });
+
+await registry.get("emailSender").execute();
+
+// Override a tool's properties (merges for objects)
+const patched = registry.override("emailSender", { execute: async () => mockSend() });
+```
+
+## Lock
+
+A class-based mutex for serializing async critical sections. Throws if `releaseLock` is called more times than `acquireLock`.
+
+```typescript
+class Lock {
+  acquireLock(): Promise<void>;
+  releaseLock(): Promise<void>;
+}
+```
+
+```typescript
+import { Lock } from "functools-kit";
+
+const lock = new Lock();
+
+async function criticalSection() {
+  await lock.acquireLock();
+  try {
+    await writeToDatabase();
+  } finally {
+    await lock.releaseLock();
+  }
+}
+
+// Concurrent calls are serialized
+await Promise.all([criticalSection(), criticalSection(), criticalSection()]);
+```
+
+<Warning>
+  Always call `releaseLock()` inside a `finally` block. Calling it more times than `acquireLock()` throws an error.
+</Warning>
+
+## Related
+
+- [lock HOF](/api/lock) — function-level mutex wrapper
+- [queued](/api/queued) — serialize async call queues
+- [Data & iteration guide](/guides/data-structures) — full usage guide for all data structures

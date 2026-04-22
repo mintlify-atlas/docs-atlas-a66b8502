@@ -1,0 +1,78 @@
+---
+title: "Operator — reusable stream transform operators"
+description: "Static stream transform operators for functools-kit: take, skip, distinct, group, pair, strideTricks, liveness, count, and retry. Use with Observer.operator()."
+---
+
+`Operator` is a collection of reusable stream transformations. Each static method returns an operator function compatible with `Observer.operator()`. You chain operators to build declarative data processing pipelines on top of any `Observer` or `Source`.
+
+## Static operators
+
+```typescript
+class Operator {
+  // Quantity control
+  static take(count: number): OperatorFn;
+  static skip(count: number): OperatorFn;
+
+  // Deduplication
+  static distinct<T>(keySelector?: (value: T) => any): OperatorFn;
+
+  // Windowing / batching
+  static group(size: number): OperatorFn;
+  static pair(): OperatorFn;
+  static strideTricks(size: number, step: number): OperatorFn;
+
+  // Monitoring
+  static liveness(timeout: number, fallback: any): OperatorFn;
+  static count(): OperatorFn;
+
+  // Resilience
+  static retry(count: number): OperatorFn;
+}
+```
+
+## Operator descriptions
+
+| Operator | Description |
+|---|---|
+| `take(n)` | Emit only the first `n` values, then complete |
+| `skip(n)` | Drop the first `n` values, then emit the rest |
+| `distinct(keyFn?)` | Suppress consecutive duplicate values |
+| `group(n)` | Buffer values into arrays of size `n`, emit each batch |
+| `pair()` | Emit overlapping pairs `[prev, curr]` for each value |
+| `strideTricks(size, step)` | Sliding window of `size` advancing `step` at a time |
+| `liveness(timeout, fallback)` | Emit `fallback` if no value arrives within `timeout` ms |
+| `count()` | Replace each value with the running count |
+| `retry(n)` | Retry errored upstream up to `n` times before propagating |
+
+## Example
+
+```typescript
+import { Source, Operator } from "functools-kit";
+
+// Remove duplicates, skip first, take next 3
+Source.fromArray(() => [1, 2, 3, 2, 1, 4, 5])
+  .operator(Operator.distinct())   // 1,2,3,4,5
+  .operator(Operator.skip(1))      // 2,3,4,5
+  .operator(Operator.take(3))      // 2,3,4
+  .connect(v => console.log(v));
+
+// Batch interval ticks into groups of 3
+Source.fromInterval(100)
+  .operator(Operator.group(3))
+  .connect(batch => console.log(batch)); // [0,1,2], [3,4,5]...
+
+// Sliding window
+Source.fromArray(() => [1,2,3,4,5,6,7,8,9])
+  .operator(Operator.strideTricks(3, 3))
+  .connect(window => console.log(window)); // [1,2,3], [4,5,6], [7,8,9]
+
+// Retry on error
+Source.fromPromise(() => unreliableFetch())
+  .operator(Operator.retry(3))
+  .connect(result => console.log(result));
+```
+
+## Related
+
+- [Observer](/api/observer) — the stream type `.operator()` is called on
+- [Source](/api/source) — factory methods for creating streams

@@ -1,0 +1,79 @@
+---
+title: "memoize — key-function based result caching"
+description: "memoize caches results by a key derived from arguments. Supports per-key clear and full cache control via add, remove, get, has, keys, and values methods."
+---
+
+`memoize` is the foundational caching primitive in functools-kit. You provide a key function that derives a cache key from the call arguments, and `memoize` ensures the underlying function is called at most once per unique key. The result is stored indefinitely until explicitly cleared. Failed promises automatically evict their cache entry.
+
+## Signature
+
+```typescript
+export interface IClearableMemoize<K = string> {
+  clear: (key?: K) => void;
+}
+
+export interface IRefMemoize<T = any> {
+  current: T;
+}
+
+export interface IControlMemoize<K, V> {
+  add: (key: K, value: V) => void;
+  remove: (key: K) => boolean;
+  values: () => V[];
+  keys: () => K[];
+  has: (key: K) => boolean;
+  get: (key: K) => V | undefined;
+}
+
+export const memoize = <T extends (...args: any[]) => any, K = string>(
+  key: (args: Parameters<T>) => K,
+  run: T
+): T & IClearableMemoize<K> & IControlMemoize<K, ReturnType<T>>
+```
+
+## Parameters
+
+<ParamField path="key" type="(args: Parameters<T>) => K" required>
+  A function that derives the cache key from the call arguments. Called on every invocation to look up or store the result.
+</ParamField>
+
+<ParamField path="run" type="T" required>
+  The function whose results should be cached.
+</ParamField>
+
+## Return value
+
+Returns the wrapped function with the same call signature, plus `IClearableMemoize<K>` and `IControlMemoize<K, ReturnType<T>>` mixed in. Key methods:
+
+- `.clear(key?)` — clear one entry by key, or the entire cache if omitted
+- `.has(key)` — check if a key exists in the cache
+- `.get(key)` — retrieve a cached value without calling the function
+- `.add(key, value)` — manually insert a value into the cache
+- `.remove(key)` — manually remove an entry
+
+## Example
+
+```typescript
+import { memoize } from "functools-kit";
+
+const getUser = memoize(
+  ([userId]) => userId,
+  async (userId: string) => fetchUser(userId)
+);
+
+// First call fetches; subsequent calls return cached result
+const user = await getUser("u-123");
+const sameCached = await getUser("u-123");
+
+// Clear a specific entry
+getUser.clear("u-123");
+
+// Manually warm the cache
+getUser.add("u-456", { id: "u-456", name: "Alice" });
+```
+
+## Related
+
+- [cached](/api/cached) — cache by argument change detection
+- [ttl](/api/ttl) — cache with automatic expiry
+- [router](/api/router) — per-key memoization with invalidation

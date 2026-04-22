@@ -1,0 +1,84 @@
+---
+title: "lock — Pause and resume a queued async function"
+description: "Wraps an async function with an external lock gate. Callers queue normally but execution halts while a lock is held; use beginLock/endLock to control the gate."
+---
+
+`lock` is a higher-order function that adds a pausable gate on top of `queued` serialisation. Calls still accumulate in a FIFO queue, but when a lock is active (incremented via `beginLock()`), execution pauses until all locks are released with `endLock()`. This is useful for suspending background processing during critical sections — for example, pausing a poll loop while a modal dialog is open, or delaying event handlers while a bulk operation is in progress.
+
+## Signature
+
+```typescript
+export interface IWrappedLockFn<T extends any = any, P extends any[] = any>
+    extends IWrappedQueuedFn<T, P> {
+    beginLock(): void;
+    endLock(): Promise<void>;
+    clear(): void;
+    cancel(): void;
+}
+
+export const lock: <T extends any = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedLockFn<T, P>;
+```
+
+## Parameters
+
+<ParamField path="promise" type="(...args: P) => Promise<T>" required>
+  The async function to wrap. Executions are serialised via an internal `queued` wrapper and further gated by the lock counter.
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedLockFn<T, P>`, which extends `IWrappedQueuedFn` with:
+
+<ResponseField name="(...args: P)" type="Promise<T | typeof CANCELED_PROMISE_SYMBOL>">
+  Enqueues the call. Execution is deferred while the lock count is greater than zero.
+</ResponseField>
+
+<ResponseField name="beginLock()" type="void">
+  Increments the internal lock counter. Each call to `beginLock` must be paired with a corresponding `endLock`.
+</ResponseField>
+
+<ResponseField name="endLock()" type="Promise<void>">
+  Decrements the lock counter. When the counter reaches zero all waiting calls are allowed to proceed. Returns a promise that resolves once the drain step completes.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Resets the lock counter to zero and clears the queue.
+</ResponseField>
+
+<ResponseField name="cancel()" type="void">
+  Cancels all pending calls and resets queue and lock state.
+</ResponseField>
+
+## Example
+
+```typescript
+import { lock } from 'functools-kit';
+
+const processEvent = lock(async (event: Event) => {
+    await saveToDatabase(event);
+});
+
+async function bulkImport(events: Event[]) {
+    // Pause background event processing during bulk import
+    processEvent.beginLock();
+    try {
+        await importAll(events);
+    } finally {
+        await processEvent.endLock();
+    }
+}
+
+// Background calls queue up while the lock is held
+processEvent({ type: 'click' });
+processEvent({ type: 'scroll' });
+
+bulkImport(largeDataset);
+// The two queued calls execute after bulkImport releases the lock
+```
+
+## Related
+
+- [queued](/api/queued) — the serialisation layer `lock` extends
+- [singlerun](/api/singlerun) — allow only one concurrent execution with no external gate

@@ -1,0 +1,230 @@
+---
+title: "Memoize and cached: argument-based caching"
+description: "Cache function results in functools-kit using memoize (key-function based) or cached (argument-change detection). Learn when to use each and how to clear them."
+---
+
+functools-kit provides two HOFs for synchronous result caching: `memoize` and `cached`. Both avoid re-running a function when the inputs haven't meaningfully changed, but they differ in how they detect "same input". `memoize` hashes arguments down to a string key you supply; `cached` compares the raw argument arrays with a `changed` predicate you provide. Pick `memoize` when you need to store results for many distinct inputs simultaneously. Pick `cached` when you only ever need to remember the last result.
+
+## memoize
+
+`memoize` wraps a function and stores its return values in an in-memory `Map` keyed by whatever string (or custom type) your `key` function produces. The wrapped function is only called when a given key is seen for the first time. On every subsequent call with the same key the cached value is returned immediately without invoking the original function.
+
+### Type signature
+
+```typescript
+export interface IClearableMemoize<K = string> {
+    clear: (key?: K) => void;
+}
+
+export interface IRefMemoize<T = any> {
+    current: T;
+}
+
+export interface IControlMemoize<K, V> {
+    add:    (key: K, value: V) => void;
+    remove: (key: K) => boolean;
+    values: () => V[];
+    keys:   () => K[];
+    has:    (key: K) => boolean;
+    get:    (key: K) => V | undefined;
+}
+
+export const memoize: <T extends (...args: any[]) => any, K = string>(
+    key: (args: Parameters<T>) => K,
+    run: T
+) => T & IClearableMemoize<K> & IControlMemoize<K, ReturnType<T>>;
+```
+
+The returned function satisfies both `IClearableMemoize` and `IControlMemoize`, so you can inspect, pre-populate, or surgically evict individual cache entries at runtime.
+
+### Example: per-user data fetch
+
+```typescript
+import { memoize } from 'functools-kit';
+
+const getUser = memoize(
+    ([userId]) => userId,               // Key: the first argument.
+    async (userId: string) => {
+        const res = await fetch(`/api/users/${userId}`);
+        return res.json();
+    }
+);
+
+// First call fetches from the network.
+const alice = await getUser('alice');
+
+// Second call returns the cached value — no network request.
+const aliceAgain = await getUser('alice');
+
+// Invalidate a single user.
+getUser.clear('alice');
+
+// Or flush everything.
+getUser.clear();
+```
+
+<Note>
+  If the wrapped function returns a `Promise` and that promise rejects, the cache entry for that key is automatically removed so the next call can retry.
+</Note>
+
+### Using IControlMemoize
+
+The control interface gives you direct access to the underlying map without calling the function.
+
+```typescript
+import { memoize } from 'functools-kit';
+
+const resolve = memoize(
+    ([id]) => id,
+    (id: string) => expensiveCompute(id)
+);
+
+// Pre-seed the cache.
+resolve.add('known-id', precomputedValue);
+
+// Check existence before calling.
+if (!resolve.has('some-id')) {
+    resolve.add('some-id', fallbackValue);
+}
+
+// Read all cached keys.
+console.log(resolve.keys()); // ['known-id', 'some-id']
+
+// Remove one entry.
+resolve.remove('known-id');
+```
+
+---
+
+## cached
+
+`cached` is a simpler, stateless-looking cache: it remembers only the most recent call. Each time the wrapped function is invoked, your `changed` predicate compares the new arguments to the previous call's arguments. If `changed` returns `false`, the last return value is served from cache. If `changed` returns `true`, the function is re-run and the new value and arguments are stored, replacing the old ones.
+
+### Type signature
+
+```typescript
+export interface IClearableCached {
+    clear: () => void;
+}
+
+export const cached: <T extends (...args: any[]) => any>(
+    changed: (prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean,
+    run: T
+) => T & IClearableCached;
+```
+
+Unlike `memoize`, there is no key function and no per-key storage — only a single last-value slot. `.clear()` resets that slot so the next call is treated as the first.
+
+### Example: derived value from a config object
+
+```typescript
+import { cached } from 'functools-kit';
+
+interface Config {
+    host: string;
+    port: number;
+}
+
+const buildConnectionString = cached(
+    (prev, curr) => prev[0].host !== curr[0].host || prev[0].port !== curr[0].port,
+    (config: Config) => `${config.host}:${config.port}`
+);
+
+const a = buildConnectionString({ host: 'localhost', port: 5432 }); // Computed.
+const b = buildConnectionString({ host: 'localhost', port: 5432 }); // Cached.
+const c = buildConnectionString({ host: 'db.prod', port: 5432 });   // Recomputed.
+```
+
+<Note>
+  Like `memoize`, if the wrapped function returns a rejecting `Promise`, `cached` calls `.clear()` internally so the next call starts fresh.
+</Note>
+
+---
+
+## memoize vs cached
+
+Use this table to choose between the two HOFs.
+
+| | `memoize` | `cached` |
+|---|---|---|
+| Number of cached values | One per unique key | One (the last call only) |
+| Key strategy | You supply a `key` function | No key — single slot |
+| Cache control | `add`, `remove`, `has`, `get`, `keys`, `values` | None |
+| Cache invalidation | Per-key or full clear | Full clear only |
+| Best for | Multiple distinct identities | Memoizing the last result |
+
+---
+
+## debounce and throttle
+
+`debounce` and `throttle` are timing-based HOFs. They don't cache a return value, but they do suppress redundant invocations — making them complementary to result caching in reactive or event-driven code.
+
+`debounce` delays execution until calls stop arriving for `delay` milliseconds. Only the last call in a burst fires. It exposes `.clear()` to cancel a pending call, `.flush()` to fire immediately, and `.pending()` to check whether a call is waiting.
+
+`throttle` enforces a minimum gap of `delay` ms between executions. It fires the first call immediately and drops any calls that arrive before the gap has elapsed.
+
+### debounce type signature
+
+```typescript
+export interface IDebounceClearable {
+    clear:   () => void;
+    flush:   () => void;
+    pending: () => boolean;
+}
+
+export const debounce: <T extends (...args: any[]) => any>(
+    run: T,
+    delay?: number  // Default: 1000 ms
+) => T & IDebounceClearable;
+```
+
+### throttle type signature
+
+```typescript
+export interface IClearableThrottle {
+    clear: () => void;
+}
+
+export const throttle: <T extends (...args: any[]) => any>(
+    run: T,
+    delay?: number  // Default: 1000 ms
+) => T & IClearableThrottle;
+```
+
+### Example: search input with debounce
+
+```typescript
+import { debounce } from 'functools-kit';
+
+const search = debounce(async (query: string) => {
+    const results = await fetchResults(query);
+    renderResults(results);
+}, 300);
+
+// Fire search only after the user stops typing for 300 ms.
+inputEl.addEventListener('input', (e) => search(e.target.value));
+
+// Trigger immediately when the form is submitted without waiting.
+formEl.addEventListener('submit', () => search.flush());
+```
+
+### Example: resize handler with throttle
+
+```typescript
+import { throttle } from 'functools-kit';
+
+const onResize = throttle(() => {
+    recalculateLayout();
+}, 200);
+
+window.addEventListener('resize', onResize);
+```
+
+<CardGroup cols={2}>
+  <Card title="debounce" icon="clock">
+    Fires once after a burst of calls settles. Ideal for search inputs, auto-save, and form validation.
+  </Card>
+  <Card title="throttle" icon="gauge">
+    Fires at most once per interval. Ideal for scroll handlers, resize listeners, and polling loops.
+  </Card>
+</CardGroup>

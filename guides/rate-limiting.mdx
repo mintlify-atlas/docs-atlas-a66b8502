@@ -1,0 +1,156 @@
+---
+title: "Rate limiting async functions with rate"
+description: "Use functools-kit's rate HOF to throttle function calls per key, prevent abuse, and handle RateError when limits are exceeded in TypeScript backends."
+---
+
+`rate` is a HOF for enforcing a minimum time gap between successive calls to the same function. When a call arrives within the configured `delay` window of the previous call for the same key, `rate` throws a `RateError` synchronously instead of executing the function. This makes it straightforward to enforce call budgets in backend services — the caller must handle the error explicitly, which keeps rate-limit violations visible in your code rather than silently dropping work.
+
+## The rate HOF
+
+`rate` wraps `memoize` internally to track the last invocation time per key. On each call it checks how much time has elapsed since the previous call for that key. If less than `delay` ms has passed, a `RateError` is thrown. If the delay has been met, the function is executed and the timestamp is updated.
+
+### Type signature
+
+```typescript
+export class RateError extends Error {
+    type: "rate-error";
+}
+
+export interface IClearableRate<K = string> extends IClearableMemoize<K> {
+    clear: (key?: K) => void;
+    gc:    () => void;
+}
+
+export const rate: <T extends (...args: any[]) => any, K = string>(
+    run: T,
+    options?: {
+        key?:      (args: Parameters<T>) => K;  // Per-call key (default: single shared slot)
+        rateName?: string;                       // Name for error messages (default: "unknown-rate")
+        delay?:    number;                       // Minimum ms between calls (default: 1000 ms)
+    }
+) => T & IClearableRate<K> & IControlMemoize<K, ReturnType<T>>;
+```
+
+The default `delay` is **1000 ms**. When a call is rejected, the error message includes the `rateName` you provided, making it easier to identify which rate limiter fired in logs.
+
+### Example: per-user API endpoint protection
+
+```typescript
+import { rate, RateError } from 'functools-kit';
+
+const handleRequest = rate(
+    async (userId: string, payload: RequestPayload) => {
+        return processRequest(userId, payload);
+    },
+    {
+        key:      ([userId]) => userId,
+        rateName: 'handleRequest',
+        delay:    2_000, // One call per user every 2 s.
+    }
+);
+
+async function apiHandler(userId: string, payload: RequestPayload) {
+    try {
+        return await handleRequest(userId, payload);
+    } catch (err) {
+        if (err instanceof RateError) {
+            return { error: 'Too many requests. Please wait before trying again.' };
+        }
+        throw err;
+    }
+}
+```
+
+### Example: global rate limit without a key
+
+When no `key` option is provided, all calls share a single slot — useful for a function that should be called at most once per interval regardless of arguments.
+
+```typescript
+import { rate, RateError } from 'functools-kit';
+
+const syncInventory = rate(
+    async () => {
+        await fetch('/api/sync', { method: 'POST' });
+    },
+    {
+        rateName: 'syncInventory',
+        delay:    10_000, // At most once every 10 s.
+    }
+);
+
+try {
+    await syncInventory();
+} catch (err) {
+    if (err instanceof RateError) {
+        console.warn('Sync already triggered recently. Skipping.');
+    }
+}
+```
+
+---
+
+## Handling RateError
+
+`RateError` extends the built-in `Error` class and carries a `type` property set to `"rate-error"`. You can use either `instanceof` or the `type` discriminant to identify it in catch blocks.
+
+```typescript
+import { RateError } from 'functools-kit';
+
+try {
+    await rateLimitedFn(args);
+} catch (err) {
+    if (err instanceof RateError) {
+        // Respond with 429 in an HTTP handler.
+        res.status(429).json({ message: err.message });
+        return;
+    }
+    // Re-throw anything that is not a rate error.
+    throw err;
+}
+```
+
+<Warning>
+  `RateError` is thrown **synchronously** before the wrapped function is ever called. Your error boundary must be around the call site, not just inside an async catch chain.
+</Warning>
+
+---
+
+## Garbage collection with .gc()
+
+Each per-key call record stays in memory until explicitly cleared. In long-running processes where many distinct keys are used, call `.gc()` periodically to evict entries whose delay window has already expired.
+
+```typescript
+import { rate } from 'functools-kit';
+
+const submitForm = rate(submitToBackend, {
+    key:   ([sessionId]) => sessionId,
+    delay: 5_000,
+});
+
+// Clean up expired per-session records every minute.
+setInterval(() => submitForm.gc(), 60_000);
+```
+
+---
+
+## rate vs throttle
+
+Both `rate` and `throttle` limit how often a function runs, but they handle excess calls very differently.
+
+| | `rate` | `throttle` |
+|---|---|---|
+| Excess call behaviour | Throws `RateError` | Silently drops the call |
+| Return value on rejection | Throws (caller must handle) | `undefined` (call is discarded) |
+| Per-key support | Yes, via `key` option | No |
+| Cache inspection | `add`, `remove`, `has`, `get`, `keys`, `values` | None |
+| Garbage collection | `.gc()` | Not needed |
+| Best for | APIs, backends, anywhere the caller needs to know about rejection | UI event handlers, scroll/resize listeners |
+
+<CardGroup cols={2}>
+  <Card title="rate" icon="shield">
+    Throws `RateError` when the limit is exceeded. Use when callers must handle rejection explicitly — API handlers, form submissions, webhook processing.
+  </Card>
+  <Card title="throttle" icon="gauge">
+    Silently drops excess calls. Use in UI contexts where dropping an event is harmless — scroll handlers, resize listeners, hover effects.
+  </Card>
+</CardGroup>

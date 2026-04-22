@@ -1,0 +1,345 @@
+---
+title: "Observer, Subject, and BehaviorSubject"
+description: "Learn how to use functools-kit's Observer, Subject, and BehaviorSubject classes to build reactive pipelines with map, filter, debounce, and more operators."
+---
+
+functools-kit ships a lightweight reactive layer built around three classes: `Observer`, `Subject`, and `BehaviorSubject`. Together they give you a push-based, chainable pipeline model where data flows from a source through a series of transformations to one or more subscribers — without pulling in a full library like RxJS. Each class covers a different role in the pipeline: producing values, transforming them, and replaying state.
+
+<CardGroup cols={3}>
+  <Card title="Observer" icon="eye">
+    A read-only stream handle. You attach operators (`map`, `filter`, `debounce`, …) and call `.connect()` to start receiving values. Returned by every operator and `Source` factory.
+  </Card>
+  <Card title="Subject" icon="bullhorn">
+    Both a source and a stream. Call `.next(data)` to push values and `.subscribe()` or any operator method to consume them. Multiple subscribers all receive the same emission.
+  </Card>
+  <Card title="BehaviorSubject" icon="database">
+    A `Subject` that remembers its last value. Late subscribers immediately receive the current value when they connect, making it ideal for shared state atoms.
+  </Card>
+</CardGroup>
+
+---
+
+## Observer operators
+
+`Observer<Data>` is the core primitive. You never construct one directly — sources like `Subject.toObserver()` or `Source.fromArray()` return them. Every operator is lazy: no work happens until you call `.connect()` or `.toPromise()`. Each operator returns a new `Observer`, so chains are composable. The subscription teardown propagates automatically up the chain when the `.connect()` unsubscribe function is called.
+
+### map
+
+Transforms each emitted value. The callback may be synchronous or return a `Promise<T>` — the observer handles both.
+
+```typescript
+public map<T>(callbackfn: (value: Data) => T): Observer<T>
+```
+
+```typescript
+import { Subject } from 'functools-kit';
+
+const subject = new Subject<number>();
+
+subject
+  .map((n) => n * 2)
+  .connect((n) => console.log(n)); // 2, 4, 6
+
+subject.next(1);
+subject.next(2);
+subject.next(3);
+```
+
+### filter
+
+Passes only values for which the predicate returns `true`. The predicate may also return a `Promise<boolean>`.
+
+```typescript
+public filter(callbackfn: (value: Data) => boolean): Observer<Data>
+```
+
+```typescript
+subject
+  .filter((n) => n % 2 === 0)
+  .connect((n) => console.log('even:', n)); // 2, 4
+```
+
+### tap
+
+Runs a side-effect callback for each value without changing the value that flows downstream. Useful for logging or incrementing counters mid-chain.
+
+```typescript
+public tap(callbackfn: (value: Data) => void): Observer<Data>
+```
+
+```typescript
+subject
+  .tap((n) => console.log('before filter:', n))
+  .filter((n) => n > 0)
+  .connect((n) => console.log('positive:', n));
+```
+
+### reduce
+
+Accumulates a running value across all emissions, emitting the updated accumulator after every item — equivalent to a stateful `Array.prototype.reduce` over time.
+
+```typescript
+public reduce<T>(callbackfn: (acm: T, cur: Data) => T, begin: T): Observer<T>
+```
+
+```typescript
+subject
+  .reduce<number>((sum, n) => sum + n, 0)
+  .connect((total) => console.log('running total:', total)); // 1, 3, 6, 10
+
+[1, 2, 3, 4].forEach((n) => subject.next(n));
+```
+
+### flatMap
+
+Applies a function that returns an array and flattens the result into individual emissions. Emissions are serialised through an internal queue to preserve order even when the callback is async.
+
+```typescript
+public flatMap<T>(callbackfn: (value: Data) => T[]): Observer<T>
+```
+
+```typescript
+const subject = new Subject<string>();
+
+subject
+  .flatMap((sentence) => sentence.split(' '))
+  .connect((word) => console.log(word));
+
+subject.next('hello world');   // logs "hello", then "world"
+subject.next('foo bar baz');   // logs "foo", "bar", "baz"
+```
+
+### debounce
+
+Holds back emissions and only forwards the most recent value once `delay` ms have passed without a new emission. Defaults to 1 000 ms. Use this on search inputs or resize events to avoid firing too frequently.
+
+```typescript
+public debounce(delay?: number): Observer<Data>
+```
+
+```typescript
+const input = new Subject<string>();
+
+input
+  .debounce(300)
+  .connect((query) => fetchResults(query));
+
+// A burst of rapid calls results in only one fetch, fired after the last one.
+['r', 're', 'rea', 'reac', 'react'].forEach((q) => input.next(q));
+```
+
+### connect
+
+Attaches a terminal subscriber and starts the upstream subscription. Returns an unsubscribe function that tears down the entire chain when called.
+
+```typescript
+public connect(callbackfn: (value: Data) => void): () => void
+```
+
+```typescript
+const unsub = subject
+  .filter((n) => n > 10)
+  .connect((n) => console.log(n));
+
+// Stop receiving values:
+unsub();
+```
+
+### toPromise
+
+Resolves with the first value emitted by the observer, then disposes the subscription automatically. If the observer errors before emitting, the promise rejects.
+
+```typescript
+public toPromise(): Promise<Data>
+```
+
+```typescript
+const subject = new Subject<string>();
+
+const first = subject.toPromise();
+subject.next('hello');
+
+console.log(await first); // "hello"
+```
+
+---
+
+## Subject
+
+`Subject<Data>` implements both `TSubject<Data>` and `TObservable<Data>`. It is the primary way to push values into a pipeline from outside. Multiple subscribers all receive the same emission, and operator methods are available directly on the subject so you can start a pipeline without calling `.toObserver()` first.
+
+### Type signature
+
+```typescript
+export class Subject<Data = any> {
+  next(data: Data): Promise<void>;
+  subscribe(callback: (data: Data) => void): () => void;
+  unsubscribeAll(): void;
+  once(callback: (data: Data) => void): () => void;
+  toObserver(): TObserver<Data>;
+  toPromise(): Promise<Data>;
+  onError(fn: (error: unknown) => void): () => void;
+
+  // Operator shortcuts (delegate to toObserver internally)
+  map<T>(callbackfn: (value: Data) => T): TObserver<T>;
+  filter(callbackfn: (value: Data) => boolean): TObserver<Data>;
+  tap(callbackfn: (value: Data) => void): TObserver<Data>;
+  reduce<T>(callbackfn: (acm: T, cur: Data) => T, begin: T): TObserver<T>;
+  flatMap<T>(callbackfn: (value: Data) => T[]): TObserver<T>;
+  debounce(delay?: number): TObserver<Data>;
+  merge<T>(observer: TObserver<T>): TObserver<Data | T>;
+}
+```
+
+### next
+
+Emits a value to all current subscribers. `next` is async; it awaits all subscriber callbacks in sequence and re-throws the first error any observer in the chain raised.
+
+```typescript
+const subject = new Subject<string>();
+await subject.next('hello');
+```
+
+### subscribe and unsubscribeAll
+
+`subscribe` registers a raw callback and returns an unsubscribe function. Use it when you do not need operator chaining. `unsubscribeAll` removes every subscriber at once — useful for component teardown.
+
+```typescript
+const subject = new Subject<number>();
+
+const unsub = subject.subscribe((n) => console.log('received:', n));
+
+// Remove only this subscriber:
+unsub();
+
+// Or remove all at once:
+subject.unsubscribeAll();
+```
+
+### toObserver
+
+Creates a fresh `Observer` instance backed by this subject. Operators attached to the returned observer are isolated — they do not affect other observers derived from the same subject.
+
+```typescript
+const observer = subject.toObserver();
+observer.filter((n) => n > 0).connect(console.log);
+```
+
+### Full pipeline example
+
+A common pattern is to build a typed pipeline on a `Subject`, connect once, and drive it with `next` from anywhere in the application.
+
+```typescript
+import { Subject } from 'functools-kit';
+
+interface Message {
+  userId: string;
+  text: string;
+}
+
+const messages = new Subject<Message>();
+
+const unsub = messages
+  .filter((msg) => msg.text.length > 0)
+  .map((msg) => ({ ...msg, text: msg.text.trim() }))
+  .debounce(200)
+  .connect((msg) => sendToServer(msg));
+
+await messages.next({ userId: 'u1', text: '  hello  ' });
+await messages.next({ userId: 'u2', text: '' }); // Filtered out.
+
+unsub();
+```
+
+---
+
+## BehaviorSubject
+
+`BehaviorSubject<Data>` extends `Subject<Data>` with a current-value store. When a new observer connects via `toObserver()`, it immediately receives the last emitted value before any future emissions arrive. This is the key difference from a plain `Subject`.
+
+### Type signature
+
+```typescript
+export class BehaviorSubject<Data = any> extends Subject<Data> {
+  constructor(initialValue?: Data | null);
+  get data(): Data | null;
+  next(data: Data): Promise<void>;
+  toObserver(): TObserver<Data>;
+}
+```
+
+### Current value replay
+
+Any subscriber added after a value has been emitted receives that value immediately on connect. You can also read `.data` synchronously at any time without subscribing.
+
+```typescript
+import { BehaviorSubject } from 'functools-kit';
+
+const theme = new BehaviorSubject<'light' | 'dark'>('light');
+
+// First subscriber gets 'light' immediately.
+theme.toObserver().connect((t) => console.log('A:', t)); // A: light
+
+await theme.next('dark');
+
+// Late subscriber gets 'dark' right away.
+theme.toObserver().connect((t) => console.log('B:', t)); // B: dark
+
+// Synchronous read — no subscription needed.
+console.log(theme.data); // 'dark'
+```
+
+### Using as a state atom
+
+```typescript
+import { BehaviorSubject } from 'functools-kit';
+
+const counter = new BehaviorSubject<number>(0);
+
+counter.subscribe((n) => renderCount(n));
+
+async function increment() {
+  await counter.next((counter.data ?? 0) + 1);
+}
+```
+
+---
+
+## waitForNext
+
+`waitForNext` bridges the gap between a `Subject` and a single `Promise`. It subscribes to the subject, waits until the condition predicate returns `true`, then resolves and unsubscribes automatically. An optional `delay` turns it into a timeout: if the condition is never met within that many milliseconds, the promise resolves with `TIMEOUT_SYMBOL` instead of hanging.
+
+### Type signature
+
+```typescript
+import { TIMEOUT_SYMBOL } from 'functools-kit';
+
+export const waitForNext: <T = any>(
+  subject: TSubject<T>,
+  condition: (value: T) => boolean,
+  delay?: number        // 0 or omitted = no timeout
+) => Promise<T | typeof TIMEOUT_SYMBOL>;
+```
+
+### Example: wait for a ready signal
+
+```typescript
+import { Subject, waitForNext, TIMEOUT_SYMBOL } from 'functools-kit';
+
+const status = new Subject<string>();
+
+setTimeout(() => status.next('initializing'), 100);
+setTimeout(() => status.next('ready'), 500);
+
+const result = await waitForNext(status, (s) => s === 'ready', 2_000);
+
+if (result === TIMEOUT_SYMBOL) {
+  console.error('Service did not become ready in time.');
+} else {
+  console.log('Service is ready:', result); // 'ready'
+}
+```
+
+<Note>
+  `waitForNext` always cleans up its subscription — whether the condition is met or the timeout fires. You do not need to unsubscribe manually.
+</Note>

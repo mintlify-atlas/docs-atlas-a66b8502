@@ -1,0 +1,345 @@
+---
+title: "Specialized data structures in functools-kit"
+description: "Use functools-kit's LimitedMap, LimitedSet, SortedArray, ToolRegistry, and Lock for size-bounded collections, scored sorting, and type-safe runtime registries."
+---
+
+functools-kit ships several data structure classes that fill gaps in the standard JavaScript library. `LimitedMap` and `LimitedSet` extend the built-in `Map` and `Set` with automatic eviction once a size cap is reached. `SortedArray` maintains items in descending score order with binary-search insertion. `ToolRegistry` provides an immutable, type-safe key-value registry for dependency injection. `Lock` gives you a reentrant-safe async mutex. All five are thin, zero-dependency classes you can use directly without any setup.
+
+---
+
+## LimitedMap
+
+`LimitedMap` extends `Map<K, V>` and caps the number of entries. When a new key is inserted and the map is already at capacity, the oldest key — the one at the front of insertion order — is evicted before the new entry is stored. This gives you an approximate LRU eviction policy based on insertion order.
+
+### Type signature
+
+```typescript
+export class LimitedMap<K, V> extends Map<K, V> {
+  constructor(maxSize?: number);   // Default: 20
+  set(key: K, value: V): this;     // Evicts oldest entry if at capacity
+}
+```
+
+### Example: bounded response cache
+
+```typescript
+import { LimitedMap } from 'functools-kit';
+
+// Cache at most 100 API responses in memory.
+const responseCache = new LimitedMap<string, Response>(100);
+
+async function fetchWithCache(url: string): Promise<Response> {
+  if (responseCache.has(url)) {
+    return responseCache.get(url)!;
+  }
+  const response = await fetch(url);
+  responseCache.set(url, response);
+  return response;
+}
+```
+
+Because `LimitedMap` is a plain `Map` subclass, all standard `Map` methods — `get`, `has`, `delete`, `clear`, `entries`, `forEach` — work without any changes.
+
+<Note>
+  Eviction targets the oldest inserted key, not the least recently accessed key. If you re-`set` an existing key it moves to the end of insertion order only if you first delete it; otherwise the existing entry is updated in place without affecting eviction order.
+</Note>
+
+---
+
+## LimitedSet
+
+`LimitedSet` mirrors `LimitedMap` but for `Set<T>`. When a new value is added and the set is already at capacity, the oldest value is removed first. Every standard `Set` method works as usual.
+
+### Type signature
+
+```typescript
+export class LimitedSet<T> extends Set<T> {
+  constructor(maxSize?: number);  // Default: 20
+  add(value: T): this;            // Evicts oldest value if at capacity
+}
+```
+
+### Example: deduplication window
+
+```typescript
+import { LimitedSet } from 'functools-kit';
+
+// Remember the last 500 processed event IDs to avoid reprocessing.
+const processedIds = new LimitedSet<string>(500);
+
+async function handleEvent(event: { id: string; payload: unknown }) {
+  if (processedIds.has(event.id)) {
+    return; // Already handled — skip.
+  }
+  processedIds.add(event.id);
+  await processPayload(event.payload);
+}
+```
+
+<Tip>
+  `LimitedSet` is a good fit for sliding-window deduplication in event streams where you care only about recent history, not the full past.
+</Tip>
+
+---
+
+## SortedArray
+
+`SortedArray<T>` maintains items in descending score order, inserting each new entry in the correct position using binary search. It is useful for top-N ranking, priority queues, and any scenario where you need to efficiently retrieve the highest-scoring items.
+
+### Type signature
+
+```typescript
+export class SortedArray<T = any> {
+  push(item: T, score: number): void;
+  pop(item: T): boolean;
+  take(n: number, minScore?: number): T[];
+  getItems(): T[];
+  getEntries(): { item: T; score: number }[];
+  get length(): number;
+  [Symbol.iterator](): Iterator<T>;
+}
+```
+
+### API details
+
+| Method | Description |
+|---|---|
+| `push(item, score)` | Inserts `item` at the position corresponding to `score` (highest scores first). |
+| `pop(item)` | Removes `item` by reference. Returns `true` if found, `false` otherwise. |
+| `take(n, minScore?)` | Returns up to `n` items whose score meets or exceeds `minScore`. Defaults to all scores. |
+| `getItems()` | Returns all items as an array in sorted order (no scores). |
+| `getEntries()` | Returns all `{ item, score }` entries in sorted order. |
+| `length` | Number of items currently stored. |
+
+### Example: maintaining a top-10 leaderboard
+
+```typescript
+import { SortedArray } from 'functools-kit';
+
+interface Player {
+  id: number;
+  name: string;
+}
+
+const leaderboard = new SortedArray<Player>();
+
+leaderboard.push({ id: 1, name: 'Alice' }, 4200);
+leaderboard.push({ id: 2, name: 'Bob' }, 3900);
+leaderboard.push({ id: 3, name: 'Carol' }, 5100);
+leaderboard.push({ id: 4, name: 'Dave' }, 4750);
+
+// Top 3 players regardless of minimum score.
+const top3 = leaderboard.take(3);
+console.log(top3); // [Carol, Dave, Alice]
+
+// Players scoring at least 4000.
+const highScorers = leaderboard.take(10, 4000);
+console.log(highScorers); // [Carol, Dave, Alice]
+
+// Scores with values for a display table.
+const entries = leaderboard.getEntries();
+// [{ item: Carol, score: 5100 }, { item: Dave, score: 4750 }, ...]
+```
+
+### Example: evicting low-priority tasks
+
+```typescript
+import { SortedArray } from 'functools-kit';
+
+interface Task {
+  id: string;
+  run: () => Promise<void>;
+}
+
+const queue = new SortedArray<Task>();
+
+queue.push({ id: 'report', run: generateReport }, 10);
+queue.push({ id: 'email',  run: sendEmail },      50);
+queue.push({ id: 'index',  run: rebuildIndex },   30);
+
+// Execute the two highest-priority tasks.
+for (const task of queue.take(2)) {
+  await task.run();
+}
+```
+
+---
+
+## ToolRegistry
+
+`ToolRegistry<T>` is an immutable, type-safe registry for named tools or services. Registering a new tool does not mutate the existing registry — it returns a new `ToolRegistry` instance with the updated generic type, so TypeScript tracks every registered key at compile time. This makes it suitable for dependency injection containers and plugin systems where you want a compile-time guarantee that a tool exists before calling `get`.
+
+### Type signature
+
+```typescript
+export class ToolRegistry<T extends Record<string, unknown> = {}> {
+  constructor(registryName: string, tools?: T);
+
+  register<K extends string, U>(
+    name: K,
+    tool: U
+  ): ToolRegistry<T & Record<K, U>>;
+
+  override<K extends string, U>(
+    name: K,
+    tool: U
+  ): ToolRegistry<T & Record<K, U>>;
+
+  get<K extends keyof T>(name: K): T[K];
+
+  init(): void;
+}
+```
+
+### API details
+
+| Method | Description |
+|---|---|
+| `register(name, tool)` | Adds a new tool. Throws if `name` is already registered. Returns a new registry with the updated type. |
+| `override(name, tool)` | Adds or merges a tool. If `name` exists and both the existing and new values are plain objects, they are merged with `Object.assign`. Returns a new registry. |
+| `get(name)` | Retrieves a registered tool. TypeScript infers the return type from the registry's generic. Throws if `name` is not registered. |
+| `init()` | Calls `.init()` on every registered tool that exposes one. Useful for lazy initialisation. |
+
+### Example: building a typed service registry
+
+```typescript
+import { ToolRegistry } from 'functools-kit';
+
+interface Logger {
+  log(msg: string): void;
+}
+
+interface Cache {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+}
+
+// Each call to register() widens the registry type.
+const registry = new ToolRegistry('app')
+  .register('logger', { log: (msg) => console.log(msg) } as Logger)
+  .register('cache', new Map() as unknown as Cache);
+
+// TypeScript knows the return type of each get() call.
+const logger = registry.get('logger'); // Logger
+const cache  = registry.get('cache');  // Cache
+
+logger.log('Service registry ready');
+
+// Attempting to get an unregistered key is a compile-time error.
+// registry.get('database'); // Error: Argument of type '"database"' is not assignable...
+```
+
+### Example: plugin system with init
+
+```typescript
+import { ToolRegistry } from 'functools-kit';
+
+class DatabasePlugin {
+  private connection: unknown = null;
+  init() {
+    this.connection = openDatabaseConnection();
+    console.log('Database connected');
+  }
+  query(sql: string) { /* ... */ }
+}
+
+const plugins = new ToolRegistry('plugins')
+  .register('db', new DatabasePlugin());
+
+// Calls DatabasePlugin.init() — safe to call even if not all tools have init.
+plugins.init();
+
+plugins.get('db').query('SELECT 1');
+```
+
+<Warning>
+  Calling `register` with a name that is already in the registry throws immediately. Use `override` if you intentionally want to replace or merge an existing entry.
+</Warning>
+
+---
+
+## Lock
+
+`Lock` is an async mutual exclusion primitive. It serialises concurrent async callers so that only one holds the lock at a time. Internally it uses a queued scheduler, so waiting callers do not spin — they are suspended and resumed in order. Calling `releaseLock` more times than `acquireLock` throws immediately, which catches mismatched finally blocks at runtime.
+
+### Type signature
+
+```typescript
+export class Lock {
+  acquireLock(): Promise<void>;
+  releaseLock(): Promise<void>;
+}
+```
+
+### How it works
+
+`Lock` keeps a numeric `_isBusy` counter. `acquireLock` polls until the counter reaches zero and then increments it; `releaseLock` decrements it. Because `acquireLock` is wrapped with the `queued` scheduler, concurrent callers are serialised and will not busy-wait against each other — each call enters the queue and waits its turn.
+
+### Example: guarding a critical section
+
+```typescript
+import { Lock } from 'functools-kit';
+
+const lock = new Lock();
+
+async function updateBalance(accountId: number, delta: number) {
+  await lock.acquireLock();
+  try {
+    const account = await fetchAccount(accountId);
+    await saveAccount({ ...account, balance: account.balance + delta });
+  } finally {
+    await lock.releaseLock();
+  }
+}
+
+// Concurrent calls execute one at a time even if triggered in parallel.
+await Promise.all([
+  updateBalance(42, +100),
+  updateBalance(42, -50),
+  updateBalance(42, +200),
+]);
+```
+
+### Example: protecting a shared file write
+
+```typescript
+import { Lock } from 'functools-kit';
+import { appendFile } from 'fs/promises';
+
+const fileLock = new Lock();
+
+async function appendLog(line: string) {
+  await fileLock.acquireLock();
+  try {
+    await appendFile('/var/log/app.log', line + '\n');
+  } finally {
+    await fileLock.releaseLock();
+  }
+}
+```
+
+<Warning>
+  Always call `releaseLock` inside a `finally` block. If it is never called after a successful `acquireLock`, all subsequent callers will wait indefinitely. Calling `releaseLock` more times than `acquireLock` throws `"Extra release in finally block"`.
+</Warning>
+
+---
+
+## Quick reference
+
+<CardGroup cols={2}>
+  <Card title="LimitedMap" icon="table-cells">
+    Size-bounded `Map`. Evicts the oldest insertion-order entry when full. Default cap: 20.
+  </Card>
+  <Card title="LimitedSet" icon="circle-dot">
+    Size-bounded `Set`. Evicts the oldest insertion-order value when full. Default cap: 20.
+  </Card>
+  <Card title="SortedArray" icon="arrow-down-wide-short">
+    Maintains items in descending score order. Binary-search insertion, `take(n, minScore)` for top-N retrieval.
+  </Card>
+  <Card title="ToolRegistry" icon="puzzle-piece">
+    Immutable typed registry. `register` widens the generic; `get` returns the exact registered type. Throws on duplicate keys.
+  </Card>
+  <Card title="Lock" icon="lock">
+    Async mutex. Serialises callers with a queued scheduler. Throws if released more times than acquired.
+  </Card>
+</CardGroup>

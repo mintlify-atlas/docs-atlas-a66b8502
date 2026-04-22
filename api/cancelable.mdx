@@ -1,0 +1,69 @@
+---
+title: "cancelable — Wrap a promise with cancellation"
+description: "Wraps an async function so any in-flight call can be cancelled imperatively. Returns CANCELED_PROMISE_SYMBOL instead of the resolved value when cancelled."
+---
+
+`cancelable` is a higher-order function that adds explicit cancellation to any promise-returning function. When you call `.cancel()` on the wrapped function, the current in-flight promise resolves immediately with `CANCELED_PROMISE_SYMBOL` rather than the original value, and any subsequent `.then` handlers can check for it. Each new invocation of the wrapped function automatically cancels the previous one, making it well-suited for type-ahead search inputs or any "latest wins" async pattern.
+
+## Signature
+
+```typescript
+export const CANCELED_PROMISE_SYMBOL: unique symbol;
+
+export interface IWrappedCancelableFn<T extends any = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    cancel(): void;
+}
+
+export const cancelable: <T extends any = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedCancelableFn<T, P>;
+```
+
+## Parameters
+
+<ParamField path="promise" type="(...args: P) => Promise<T>" required>
+  The async function to wrap. Must return a `Promise`. The same arguments shape `P` is preserved on the wrapped function.
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedCancelableFn<T, P>` — a callable that:
+
+- Invoked with the same arguments as the original function, returns `Promise<T | typeof CANCELED_PROMISE_SYMBOL>`.
+- Exposes a `.cancel()` method that resolves the current in-flight promise with `CANCELED_PROMISE_SYMBOL` and prevents the original result from ever being delivered.
+
+Calling the wrapped function while a previous call is still pending automatically cancels the previous call before starting the new one.
+
+## Example
+
+```typescript
+import { cancelable, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const fetchUser = cancelable(async (id: number) => {
+    const res = await fetch(`/api/users/${id}`);
+    return res.json();
+});
+
+// First call — will be cancelled before it resolves
+fetchUser(1).then((result) => {
+    if (result === CANCELED_PROMISE_SYMBOL) {
+        console.log('call 1 was cancelled');
+    }
+});
+
+// Second call cancels the first
+fetchUser(2).then((result) => {
+    if (result !== CANCELED_PROMISE_SYMBOL) {
+        console.log('user:', result);
+    }
+});
+
+// Cancel manually at any time
+fetchUser.cancel();
+```
+
+## Related
+
+- [queued](/api/queued) — serialise calls into a sequential queue with the same cancellation symbol
+- [timeout](/api/timeout) — race a promise against a deadline instead of cancelling it imperatively

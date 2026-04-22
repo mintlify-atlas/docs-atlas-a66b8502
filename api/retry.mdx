@@ -1,0 +1,91 @@
+---
+title: "retry — Auto-retry async functions with back-off"
+description: "Wraps an async function to retry automatically on failure, with configurable attempt count, delay between retries, and an optional error condition predicate."
+---
+
+`retry` is a higher-order function that wraps an async function with automatic retry logic. When the inner function throws, `retry` waits for `delay` milliseconds and tries again, up to `count` total attempts. An optional `condition` predicate lets you decide per-error whether retrying makes sense — returning `false` from it re-throws immediately without consuming more attempts. Because `retry` is built on top of `queued`, the wrapped function also inherits `.cancel()` and `.clear()` for aborting pending work.
+
+## Signature
+
+```typescript
+export interface IWrappedRetryFn<T extends any = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    cancel(): void;
+    clear(): void;
+}
+
+export const retry: <T extends any = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    count?: number,                        // default: 5
+    delay?: number,                        // default: 1000 (ms)
+    condition?: (error: Error) => boolean  // default: () => true
+) => IWrappedRetryFn<T, P>;
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The async function to call. If it throws, `retry` will call it again after `delay` ms, up to `count` times.
+</ParamField>
+
+<ParamField path="count" type="number">
+  Total number of attempts before re-throwing the last error. Defaults to `5`.
+</ParamField>
+
+<ParamField path="delay" type="number">
+  Milliseconds to wait between attempts. Defaults to `1000`.
+</ParamField>
+
+<ParamField path="condition" type="(error: Error) => boolean">
+  Called with each caught error. Return `true` to retry, `false` to re-throw immediately without further attempts. Defaults to `() => true`.
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedRetryFn<T, P>` — a callable that:
+
+<ResponseField name="(...args: P)" type="Promise<T | typeof CANCELED_PROMISE_SYMBOL>">
+  Runs `run` up to `count` times. Resolves with the value on success, `CANCELED_PROMISE_SYMBOL` if cancelled, or rejects after all attempts are exhausted.
+</ResponseField>
+
+<ResponseField name="cancel()" type="void">
+  Cancels the queued call chain (inherited from `queued`).
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Resets the internal queue state (inherited from `queued`).
+</ResponseField>
+
+## Example
+
+```typescript
+import { retry, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const fetchWithRetry = retry(
+    async (url: string) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+    },
+    5,     // up to 5 attempts
+    2_000, // 2 s between retries
+    (err) => !err.message.includes('404') // don't retry 404s
+);
+
+const data = await fetchWithRetry('https://api.example.com/resource');
+
+if (data === CANCELED_PROMISE_SYMBOL) {
+    console.log('request was cancelled');
+} else {
+    console.log(data);
+}
+
+// Cancel all pending retry chains
+fetchWithRetry.cancel();
+```
+
+## Related
+
+- [queued](/api/queued) — the serialisation primitive `retry` is built on
+- [timeout](/api/timeout) — enforce a hard deadline instead of retrying
+- [cancelable](/api/cancelable) — lightweight cancellation without retry logic

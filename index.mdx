@@ -1,97 +1,86 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "functools-kit: async, caching, and reactive utilities"
+description: "functools-kit is a zero-dependency TypeScript library for async control flow, reactive streams, and smart caching for backend and full-stack projects."
 ---
 
-## Setting up
+functools-kit gives you a comprehensive, type-safe toolkit for building production-grade TypeScript backends. Whether you need cancellable promises, reactive pipelines, per-key TTL caches, or async document iteration — everything ships in one small package with zero runtime dependencies.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="box" href="/installation">
+    Install via npm, yarn, or pnpm and configure TypeScript
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Working examples for the most common patterns in minutes
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Async Control Flow" icon="arrows-spin" href="/guides/async-basics">
+    cancelable, queued, execpool, retry, lock, singlerun, and more
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Reactive Programming" icon="wave-sine" href="/guides/observer-subject">
+    Observer, Subject, BehaviorSubject, Source, and Operator
   </Card>
-</Columns>
+  <Card title="Caching & Rate Limiting" icon="database" href="/guides/memoize-cached">
+    memoize, cached, ttl, router, rate — smart caching for every pattern
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/cancelable">
+    Full type signatures and parameter docs for every export
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Why functools-kit?
 
-Everything you need to create world-class documentation.
+functools-kit consolidates the async and functional patterns you'd otherwise wire together from multiple packages. Every utility is designed to compose cleanly with the others.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Async HOFs" icon="gears">
+    Rich wrappers for concurrent, sequential, and fault-tolerant async operations — including cancellation, pooling, queuing, and retries.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Reactive Streams" icon="signal">
+    Full observer/subject pattern with `map`, `filter`, `debounce`, `merge`, `join` operators — build reactive pipelines without extra dependencies.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Smart Caching" icon="memory">
+    Cache results by key, by argument fingerprint, or with time-to-live expiry. Per-key state routing prevents memory leaks.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Data Iteration" icon="layer-group">
+    Async generator-based document iteration with offset/cursor pagination, filtering, mapping, and union merging.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    npm install functools-kit
+    ```
+  </Step>
+  <Step title="Import what you need">
+    ```typescript
+    import { cancelable, Subject, ttl, iterateDocuments } from "functools-kit";
+    ```
+  </Step>
+  <Step title="Use it in your code">
+    ```typescript
+    import { debounce, ttl } from "functools-kit";
+
+    // Debounce expensive operations
+    const onSearch = debounce((query: string) => fetchResults(query), 300);
+
+    // Cache with automatic expiry
+    const getUser = ttl(
+      async (userId: string) => fetchUser(userId),
+      { key: ([id]) => id, timeout: 60_000 }
+    );
+    ```
+  </Step>
+  <Step title="Explore the API reference">
+    Browse the [API Reference](/api/cancelable) for full type signatures and parameter docs for every export.
+  </Step>
+</Steps>
+
+## Used in production
+
+functools-kit is a core dependency in several open-source projects:
+
+- **[agent-swarm-kit](https://github.com/tripolskypetr/agent-swarm-kit)** — Multi-agent AI orchestration framework
+- **[backtest-kit](https://github.com/tripolskypetr/backtest-kit)** — TypeScript backtesting framework for trading strategies
+- **[react-declarative](https://github.com/react-declarative/react-declarative)** — Declarative React application framework

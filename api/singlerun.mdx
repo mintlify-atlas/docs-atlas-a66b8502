@@ -1,0 +1,78 @@
+---
+title: "singlerun — Run async task only once at a time"
+description: "singlerun ensures at most one pending execution at a time. While the task is pending, new calls return the same in-flight promise. Use clear() to reset."
+---
+
+`singlerun` is a higher-order function that deduplicates concurrent calls to an async function. While the wrapped function's promise is still pending, any new call returns the same in-flight promise rather than starting a fresh execution. Once the promise settles (fulfilled or rejected) the deduplication resets, and the next call starts a new execution. Use `.clear()` to reset early, and `.getStatus()` to inspect the current state programmatically. `singlerun` is used internally by `execpool` and `schedule`.
+
+## Signature
+
+```typescript
+export interface ISinglerunClearable {
+    clear: () => void;
+}
+
+export interface ITaskStatus {
+    getStatus: () => "pending" | "fulfilled" | "rejected" | "ready";
+}
+
+export class Task {
+    readonly target: Promise<any>;
+    readonly status: "pending" | "fulfilled" | "rejected";
+    constructor(target: Promise<any>);
+}
+
+export const singlerun: <T extends (...args: any[]) => any>(
+    run: T
+) => T & ISinglerunClearable & ITaskStatus;
+```
+
+## Parameters
+
+<ParamField path="run" type="T extends (...args: any[]) => any" required>
+  The function to wrap. Typically an async function, but any function returning a promise-like value works. The full type `T` is preserved on the returned wrapper.
+</ParamField>
+
+## Return value
+
+Returns `T & ISinglerunClearable & ITaskStatus` — the original function signature augmented with:
+
+<ResponseField name="clear()" type="void">
+  Resets the internal `Task` reference so the next invocation starts a fresh execution, regardless of whether the current promise has settled.
+</ResponseField>
+
+<ResponseField name="getStatus()" type='"pending" | "fulfilled" | "rejected" | "ready"'>
+  Returns the status of the current task. `"ready"` means no task has been started yet (or `clear()` was called).
+</ResponseField>
+
+## Example
+
+```typescript
+import { singlerun } from 'functools-kit';
+
+const syncData = singlerun(async () => {
+    const data = await fetch('/api/sync').then(r => r.json());
+    await writeToCache(data);
+    return data;
+});
+
+// All three calls share the same in-flight promise
+const [r1, r2, r3] = await Promise.all([
+    syncData(),
+    syncData(),
+    syncData(),
+]);
+// r1 === r2 === r3 — only one fetch was made
+
+console.log(syncData.getStatus()); // "fulfilled"
+
+// Allow a fresh run next time
+syncData.clear();
+console.log(syncData.getStatus()); // "ready"
+```
+
+## Related
+
+- [execpool](/api/execpool) — bounded concurrency pool built on `singlerun`
+- [schedule](/api/schedule) — run-once semantics combined with a scheduled queue
+- [queued](/api/queued) — strict FIFO serialisation for every call

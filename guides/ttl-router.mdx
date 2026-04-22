@@ -1,0 +1,178 @@
+---
+title: "TTL cache and per-key routing with router"
+description: "Use functools-kit's ttl for time-to-live caching with automatic garbage collection, and router for per-key memoization with custom invalidation logic."
+---
+
+Two of functools-kit's more advanced HOFs — `ttl` and `router` — solve caching problems that neither `memoize` nor `cached` handles well. `ttl` adds time-based expiry to memoized results, so stale data is never served past a configurable deadline. `router` separates concerns cleanly by maintaining an independent `cached`-style slot for each unique key, letting different identities track argument changes without sharing state.
+
+## ttl
+
+`ttl` wraps `memoize` internally and stores a timestamp alongside each cached value. On every call it checks whether the stored value is older than the configured `timeout`. If the TTL has elapsed, the cache entry is evicted and the function is called again. If the TTL has not elapsed, the cached value is returned immediately.
+
+### Type signature
+
+`IClearableTtl` extends `IClearableMemoize` with a `.gc()` method for proactive eviction and a `.setTimeout()` method to override the timeout for a specific key after it has been cached.
+
+```typescript
+export interface IClearableTtl<K = string> extends IClearableMemoize<K> {
+    clear:      (key?: K) => void;
+    gc:         () => void;
+    setTimeout: (key: K, timeout: number) => void;
+}
+
+export const ttl: <T extends (...args: any[]) => any, K = string>(
+    run: T,
+    options?: {
+        key?:     (args: Parameters<T>) => K;  // Key function (default: single shared slot)
+        timeout?: number;                       // TTL in ms (default: 250 ms)
+    }
+) => T & IClearableTtl<K> & IControlMemoize<K, ReturnType<T>>;
+```
+
+The default `timeout` is **250 ms** — suitable for micro-caching within a single request lifecycle. For longer-lived cache needs, pass an explicit value.
+
+### Example: caching an API response for 5 seconds
+
+```typescript
+import { ttl } from 'functools-kit';
+
+const getStatus = ttl(
+    async (serviceId: string) => {
+        const res = await fetch(`/api/status/${serviceId}`);
+        return res.json();
+    },
+    {
+        key:     ([serviceId]) => serviceId,
+        timeout: 5_000,
+    }
+);
+
+// First call fetches from the API.
+const status = await getStatus('payments');
+
+// Within 5 s, the cached value is returned.
+const cached = await getStatus('payments');
+
+// After 5 s, the next call automatically re-fetches.
+```
+
+### Garbage collection with .gc()
+
+Entries are evicted lazily by default — only when the entry's key is accessed again. If you accumulate many keys that are never revisited, call `.gc()` periodically to sweep expired entries without waiting for them to be accessed.
+
+```typescript
+import { ttl } from 'functools-kit';
+
+const resolveFeature = ttl(
+    (featureKey: string) => computeFeatureFlag(featureKey),
+    { key: ([k]) => k, timeout: 60_000 }
+);
+
+// Run garbage collection every 30 seconds to free stale entries.
+setInterval(() => resolveFeature.gc(), 30_000);
+```
+
+### Per-key timeout override with .setTimeout()
+
+After an entry has been cached, you can change the timeout for that specific key without evicting it. This is useful when you know certain keys should expire sooner or later than the default.
+
+```typescript
+// Cache for 60 s by default.
+const getData = ttl(fetchData, {
+    key: ([id]) => id,
+    timeout: 60_000,
+});
+
+getData('slow-resource');
+
+// Override: evict this key after only 5 s from now.
+getData.setTimeout('slow-resource', 5_000);
+```
+
+<Warning>
+  `.setTimeout()` only works if the entry for that key already exists in the cache. Calling it before the key has been populated has no effect.
+</Warning>
+
+---
+
+## router
+
+`router` combines the per-key dispatch of `memoize` with the argument-change detection of `cached`. It maintains a separate last-args/last-value slot for each unique key. When the wrapped function is called, `router` derives a key, looks up the slot for that key, runs your `changed` predicate against the stored and incoming arguments, and only re-executes the function if something changed.
+
+This is ideal when you have multiple entities (for example, multiple camera streams or user sessions) that each need their own independent change-tracking without polluting each other's state.
+
+### Type signature
+
+```typescript
+export interface IClearableRouter<K = string> {
+    clear: (key?: K) => void;
+}
+
+export const router: <T extends (...args: any[]) => any, K = string>(
+    key:     (args: Parameters<T>) => K,
+    changed: (prevArgs: Parameters<T>, currentArgs: Parameters<T>) => boolean,
+    run:     T
+) => T & IClearableRouter<K>;
+```
+
+Calling `.clear(key)` removes the cache slot for one key. Calling `.clear()` with no argument flushes all slots.
+
+### Example: per-camera async processing
+
+```typescript
+import { router } from 'functools-kit';
+
+const processCamera = router<
+    (cameraId: number, cacheId: string) => Promise<void>,
+    number
+>(
+    ([cameraId]) => cameraId,                           // Route by camera ID.
+    ([, prevCacheId], [, currCacheId]) =>
+        prevCacheId !== currCacheId,                    // Re-run when cacheId changes.
+    async (cameraId, cacheId) => {
+        await applySnapshot(cameraId, cacheId);
+    }
+);
+
+// Camera 1 — first call, always runs.
+await processCamera(1, 'snap-001');
+
+// Camera 1 — same cacheId, re-uses previous result.
+await processCamera(1, 'snap-001');
+
+// Camera 2 — different key, independent slot, always runs.
+await processCamera(2, 'snap-001');
+
+// Camera 1 — new cacheId, re-runs.
+await processCamera(1, 'snap-002');
+
+// Evict camera 1's slot only.
+processCamera.clear(1);
+```
+
+<Note>
+  If the wrapped function returns a rejecting `Promise`, the cache slot for that key is automatically removed so the next call starts fresh.
+</Note>
+
+---
+
+## ttl vs router
+
+Both HOFs partition their cache by key, but their eviction strategies are completely different.
+
+| | `ttl` | `router` |
+|---|---|---|
+| Eviction trigger | Time elapsed since last computation | Arguments changed (your predicate) |
+| Eviction granularity | Per-key or full clear, plus `.gc()` | Per-key or full clear |
+| Per-key timeout control | `.setTimeout(key, ms)` | Not applicable |
+| Async support | Yes, rejects clear the entry | Yes, rejects clear the entry |
+| Best for | Stale-on-age data (API responses, config) | Stale-on-change data (entity snapshots, derived views) |
+
+<CardGroup cols={2}>
+  <Card title="ttl" icon="timer">
+    Use when data becomes stale after a fixed duration, regardless of what changed. Common for API response caches and feature flags.
+  </Card>
+  <Card title="router" icon="route">
+    Use when you want per-entity change detection, where re-running depends on whether specific arguments differ from last time.
+  </Card>
+</CardGroup>

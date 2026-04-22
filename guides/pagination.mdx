@@ -1,0 +1,331 @@
+---
+title: "Paginating and transforming document streams"
+description: "Apply paginateDocuments, filterDocuments, mapDocuments, pickDocuments, and distinctDocuments to async generator streams for scalable data pipelines."
+---
+
+Once you have an async generator producing rows — whether from `iterateDocuments`, `iterateList`, or any other source — functools-kit provides a set of composable operators to filter, transform, deduplicate, slice, and materialise that stream. Each operator is itself an async generator, so they chain together into a lazy pipeline: no row is fetched or processed until something downstream actually reads it.
+
+## filterDocuments
+
+`filterDocuments` passes each row through a predicate and only yields rows where the predicate returns `true`. The predicate can be synchronous or async, so you can perform database lookups or network calls inside the filter if needed.
+
+### Type signature
+
+```typescript
+export async function* filterDocuments<T extends unknown>(
+  iterator: AsyncGenerator<T | T[], void, unknown>,
+  predicate: (value: T) => boolean | Promise<boolean>
+): AsyncGenerator<T, void, unknown>;
+```
+
+### Example
+
+```typescript
+import { iterateDocuments, filterDocuments } from 'functools-kit';
+
+interface Invoice {
+  id: number;
+  status: 'paid' | 'pending' | 'overdue';
+  amount: number;
+}
+
+const allInvoices = iterateDocuments<Invoice>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/invoices?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const overdueInvoices = filterDocuments(
+  allInvoices,
+  (invoice) => invoice.status === 'overdue'
+);
+
+for await (const invoice of overdueInvoices) {
+  await sendReminderEmail(invoice);
+}
+```
+
+---
+
+## mapDocuments
+
+`mapDocuments` transforms each row through a callback, yielding the result. Like `filterDocuments`, the callback can return a `Promise`, making it easy to enrich rows with data from external services.
+
+### Type signature
+
+```typescript
+export async function* mapDocuments<T extends unknown, U = T>(
+  iterator: AsyncGenerator<T | T[], void, unknown>,
+  callbackfn: (value: T) => U | Promise<U>
+): AsyncGenerator<U, void, unknown>;
+```
+
+### Example
+
+```typescript
+import { iterateDocuments, mapDocuments } from 'functools-kit';
+
+interface RawProduct {
+  id: number;
+  sku: string;
+  priceUsd: number;
+}
+
+interface EnrichedProduct extends RawProduct {
+  priceEur: number;
+  priceGbp: number;
+}
+
+const rawStream = iterateDocuments<RawProduct>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/products?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const enriched = mapDocuments<RawProduct, EnrichedProduct>(
+  rawStream,
+  async (product) => {
+    const rates = await fetchExchangeRates();
+    return {
+      ...product,
+      priceEur: product.priceUsd * rates.EUR,
+      priceGbp: product.priceUsd * rates.GBP,
+    };
+  }
+);
+
+for await (const product of enriched) {
+  await upsertProduct(product);
+}
+```
+
+---
+
+## distinctDocuments
+
+`distinctDocuments` deduplicates rows by their ID, yielding each unique row only once. It maintains a `Set` of seen IDs across the entire stream, so duplicates are suppressed even if they appear far apart. You can supply a custom `getId` extractor when your rows don't follow the `IRowData` shape.
+
+### Type signature
+
+```typescript
+export async function* distinctDocuments<Data = IRowData>(
+  iterator: AsyncGenerator<Data | Data[], void, unknown>,
+  getId?: (data: Data) => RowId
+): AsyncGenerator<Data, void, unknown>;
+```
+
+### Example
+
+```typescript
+import { iterateDocuments, distinctDocuments } from 'functools-kit';
+
+interface Event {
+  id: string;
+  type: string;
+  userId: number;
+}
+
+// The events API may return the same event more than once due to at-least-once delivery.
+const eventStream = iterateDocuments<Event>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/events?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const deduped = distinctDocuments(eventStream);
+
+for await (const event of deduped) {
+  await processEvent(event);
+}
+```
+
+---
+
+## pickDocuments
+
+`pickDocuments` is a stateful slice cursor. It is a lower-level primitive used by `paginateDocuments` internally. Given a `limit` and `offset`, it returns a function that accepts arrays of rows, skips the first `offset` items, collects up to `limit` items into a result buffer, and signals `done: true` once the buffer is full.
+
+### Type signature
+
+```typescript
+export const pickDocuments: <T extends any>(
+  limit: number,
+  offset: number
+) => (rows?: T[]) => { rows: T[]; done: boolean };
+```
+
+### Example: manual slice of a generator
+
+```typescript
+import { iterateDocuments, pickDocuments } from 'functools-kit';
+
+interface Article {
+  id: number;
+  title: string;
+}
+
+const stream = iterateDocuments<Article>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/articles?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const pick = pickDocuments<Article>(10, 20); // 10 rows, skip 20
+
+for await (const chunk of stream) {
+  const rows = [chunk].flatMap(v => v);
+  const { done } = pick(rows);
+  if (done) break;
+}
+
+const page = pick().rows; // Articles 21–30
+```
+
+<Note>
+  Call `pick()` with no arguments at the end to retrieve the accumulated rows. The `done` flag becomes `true` as soon as the buffer reaches `limit`, so you can break out of the generator loop early.
+</Note>
+
+---
+
+## paginateDocuments
+
+`paginateDocuments` combines `pickDocuments` with a loop over any async generator, returning a flat array of exactly the rows you asked for. It stops consuming the generator as soon as it has collected `limit` rows past the `offset`, avoiding unnecessary work.
+
+### Type signature
+
+```typescript
+export const paginateDocuments: <T extends unknown>(
+  iterator: AsyncGenerator<T | T[], void, unknown>,
+  limit: number,
+  offset: number
+) => Promise<T[]>;
+```
+
+### Example
+
+```typescript
+import { iterateDocuments, paginateDocuments } from 'functools-kit';
+
+interface User {
+  id: number;
+  name: string;
+  email: string;
+}
+
+const userStream = iterateDocuments<User>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/users?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+// Fetch page 3 at 25 items per page.
+const page3 = await paginateDocuments(userStream, 25, 50);
+console.log(page3); // Up to 25 users starting from position 50
+```
+
+---
+
+## resolveDocuments
+
+`resolveDocuments` materialises an entire async generator into a flat array. It is the simplest way to collect all rows from a pipeline when you need them all in memory at once — for example, to sort them, pass them to a third-party API, or return them from a server-side handler.
+
+### Type signature
+
+```typescript
+export const resolveDocuments: <T extends unknown>(
+  iterator: AsyncGenerator<T | T[], void, unknown>
+) => Promise<T[]>;
+```
+
+### Example
+
+```typescript
+import { iterateDocuments, filterDocuments, mapDocuments, resolveDocuments } from 'functools-kit';
+
+interface RawRecord {
+  id: number;
+  value: string;
+  active: boolean;
+}
+
+interface CleanRecord {
+  id: number;
+  value: string;
+}
+
+const raw = iterateDocuments<RawRecord>({
+  totalDocuments: 5_000,
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/records?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+const pipeline = mapDocuments<RawRecord, CleanRecord>(
+  filterDocuments(raw, (r) => r.active),
+  ({ id, value }) => ({ id, value })
+);
+
+const cleanRecords = await resolveDocuments(pipeline);
+await writeJsonFile('export.json', cleanRecords);
+```
+
+---
+
+## Composing a full pipeline
+
+The operators are designed to chain. Each one accepts `AsyncGenerator<T | T[], void, unknown>` and most return an `AsyncGenerator`, so you can stack them freely. The pipeline below fetches users, removes duplicates, filters to active accounts, enriches each row, slices a single page, and materialises the result.
+
+```typescript
+import {
+  iterateDocuments,
+  distinctDocuments,
+  filterDocuments,
+  mapDocuments,
+  paginateDocuments,
+} from 'functools-kit';
+
+interface User {
+  id: number;
+  active: boolean;
+  email: string;
+  plan?: string;
+}
+
+// 1. Source
+const source = iterateDocuments<User>({
+  createRequest: ({ limit, offset }) =>
+    fetch(`/api/users?limit=${limit}&offset=${offset}`).then(r => r.json()),
+});
+
+// 2. Deduplicate (guard against API returning the same row on page boundaries)
+const deduped = distinctDocuments(source);
+
+// 3. Filter to active users only
+const active = filterDocuments(deduped, (u) => u.active);
+
+// 4. Enrich with subscription plan
+const enriched = mapDocuments<User, User>(active, async (user) => {
+  const sub = await fetchSubscription(user.id);
+  return { ...user, plan: sub.plan };
+});
+
+// 5. Paginate: 20 items, skip 40 (page 3)
+const page = await paginateDocuments(enriched, 20, 40);
+
+console.log(page);
+```
+
+<CardGroup cols={2}>
+  <Card title="filterDocuments" icon="filter">
+    Keeps only rows that satisfy a sync or async predicate. The predicate can perform network calls.
+  </Card>
+  <Card title="mapDocuments" icon="arrow-right-arrow-left">
+    Transforms each row through a sync or async callback, changing the output type from `T` to `U`.
+  </Card>
+  <Card title="distinctDocuments" icon="circle-check">
+    Deduplicates by ID across the entire stream. Accepts a custom `getId` extractor for non-standard shapes.
+  </Card>
+  <Card title="paginateDocuments" icon="table-list">
+    Materialises a window of rows from any generator stream, stopping early once the slice is complete.
+  </Card>
+  <Card title="pickDocuments" icon="scissors">
+    Low-level slice cursor returned as a stateful function. Used by `paginateDocuments` and useful for custom loop logic.
+  </Card>
+  <Card title="resolveDocuments" icon="square-check">
+    Drains an entire generator into a flat array. Use when you need all rows in memory at once.
+  </Card>
+</CardGroup>

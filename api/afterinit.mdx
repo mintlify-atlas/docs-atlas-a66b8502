@@ -1,0 +1,63 @@
+---
+title: "afterinit — Skip the first call, run on subsequent ones"
+description: "Wraps an async function so the very first invocation is a no-op (resolves immediately). All later calls execute normally. Reset with clear() to replay the skip."
+---
+
+`afterinit` is a higher-order function that swallows the first invocation of an async function, resolving it immediately with `undefined`, and executes normally on every subsequent call. This pattern is useful for reactive side-effects that should not fire during component mount or initial state hydration but should run on all later changes. Calling `.clear()` resets the skip flag so the next invocation is treated as "first" again.
+
+## Signature
+
+```typescript
+export interface IWrappedAfterInitFn<T extends any = any, P extends any[] = any> {
+    (...args: P): Promise<T>;
+    clear(): void;
+}
+
+export const afterinit: <T extends any = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>
+) => IWrappedAfterInitFn<T, P>;
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The async function to wrap. The first call is skipped; all subsequent calls delegate to `run` with the original arguments.
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedAfterInitFn<T, P>` — a callable with one additional method:
+
+<ResponseField name="(...args: P)" type="Promise<T>">
+  First call: resolves immediately with `undefined` (typed as `never` internally to satisfy the generic). Second and later calls: delegates to `run(...args)` and returns its promise.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Resets the internal flag so the next invocation is once again treated as the "first" call and will be skipped.
+</ResponseField>
+
+## Example
+
+```typescript
+import { afterinit } from 'functools-kit';
+
+const onFormChange = afterinit(async (values: FormValues) => {
+    // Will NOT run on the initial render/mount call
+    await autosaveDraft(values);
+    console.log('draft saved');
+});
+
+// Called during initialisation — silently resolves, no autosave
+await onFormChange(initialValues);
+
+// Called on every subsequent user edit — autosave fires
+await onFormChange(updatedValues);
+
+// Reset so the next call is skipped again (e.g. after a form reset)
+onFormChange.clear();
+```
+
+## Related
+
+- [singlerun](/api/singlerun) — deduplicate concurrent calls instead of skipping the first
+- [schedule](/api/schedule) — coalesce rapid calls and execute only the latest

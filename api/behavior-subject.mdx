@@ -1,0 +1,66 @@
+---
+title: "BehaviorSubject — Subject with current value replay"
+description: "BehaviorSubject holds a current value and replays it to new subscribers immediately. Read the current value synchronously via .data without subscribing."
+---
+
+`BehaviorSubject<Data>` is a `Subject` that always holds the most recently emitted value. When a new subscriber connects, it immediately receives the current value — there's no need to wait for the next emission. It also exposes a synchronous `.data` getter so you can read the current value outside of a subscription.
+
+## Class
+
+```typescript
+class BehaviorSubject<Data = unknown> extends Subject<Data> {
+  constructor(data: Data);
+
+  // Synchronous current value
+  get data(): Data;
+
+  // Inherits all Subject and Observer methods:
+  next(data: Data): Promise<void>;
+  subscribe(callbackfn: (value: Data) => void): () => void;
+  toObserver(): Observer<Data>;
+  toPromise(): Promise<Data>;
+  // ... all Observer operators
+}
+```
+
+## Parameters
+
+<ParamField path="data" type="Data" required>
+  The initial value. Replayed immediately to every new subscriber.
+</ParamField>
+
+## Key members
+
+<ParamField path="data" type="Data">
+  Synchronous getter for the current value. Does not require a subscription.
+</ParamField>
+
+## Example
+
+```typescript
+import { BehaviorSubject } from "functools-kit";
+
+const count$ = new BehaviorSubject<number>(0);
+
+// Late subscriber gets current value immediately
+count$.subscribe(n => console.log("count:", n)); // logs: count: 0
+
+await count$.next(1); // logs: count: 1
+await count$.next(2); // logs: count: 2
+
+// Read synchronously at any time
+console.log(count$.data); // 2
+
+// Another late subscriber sees current value
+count$.subscribe(n => console.log("new subscriber:", n)); // logs: new subscriber: 2
+```
+
+<Tip>
+  Use `BehaviorSubject` for shared state that components or services need to read synchronously on initialization, such as configuration, feature flags, or user session data.
+</Tip>
+
+## Related
+
+- [Subject](/api/subject) — Subject without initial value replay
+- [Observer](/api/observer) — the reactive stream base
+- [Source](/api/source) — `Source.fromBehaviorSubject()` for creating observers

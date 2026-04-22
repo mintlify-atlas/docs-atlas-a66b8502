@@ -1,0 +1,327 @@
+---
+title: "Source factories and stream Operators"
+description: "Create Observers from arrays, promises, and intervals with Source, then transform streams using Operator methods like take, skip, distinct, and group."
+---
+
+`Source` and `Operator` are two companion classes that sit on top of `Observer`. `Source` provides factory methods for turning static data, promises, timers, and multiple streams into an `Observer`. `Operator` provides reusable operator functions — composable transforms you pass to `.operator()` rather than chaining directly on the class. Together they let you describe a full observable pipeline in a single expression.
+
+---
+
+## Source factory methods
+
+Every `Source` factory returns a `TObserver<T>`. The resulting observer is cold by default — nothing runs until you call `.connect()` or `.toPromise()`.
+
+<CardGroup cols={2}>
+  <Card title="fromArray" icon="list">
+    Emits each item in a flat array (or nested array, recursively flattened) and then completes.
+  </Card>
+  <Card title="fromPromise" icon="circle-check">
+    Resolves a promise and emits the result as a single value. Supports an optional error fallback.
+  </Card>
+  <Card title="fromInterval" icon="clock">
+    Emits an incrementing counter at a fixed interval until the observer is unsubscribed.
+  </Card>
+  <Card title="fromDelay" icon="hourglass">
+    Emits a single `void` value after a specified delay, then stops.
+  </Card>
+</CardGroup>
+
+### fromArray
+
+`fromArray` flattens the input (up to 20 levels of nesting) and emits each leaf item one by one. The observer starts emitting as soon as the first subscriber connects.
+
+```typescript
+public static fromArray<Data>(data: Data): TObserver<ReadonlyArray<FlatArray<Data[], 20>>>
+```
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+Source.fromArray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  .operator(Operator.distinct())
+  .operator(Operator.skip(2))
+  .operator(Operator.take(5))
+  .connect(console.log); // 3, 4, 5, 6, 7
+```
+
+### fromPromise
+
+Resolves a promise factory and emits the result as a single value. If the promise rejects and a `fallbackfn` is provided, the error is forwarded there instead of propagating through the error channel.
+
+```typescript
+public static fromPromise<Data>(
+  callbackfn: () => Promise<Data>,
+  fallbackfn?: (e: Error) => void
+): TObserver<Data>
+```
+
+```typescript
+import { Source } from 'functools-kit';
+
+Source.fromPromise(() => fetch('/api/config').then((r) => r.json()))
+  .map((config) => config.theme)
+  .connect((theme) => applyTheme(theme));
+```
+
+### fromInterval
+
+Emits an auto-incrementing integer (starting at `0`) at the given `delay` in milliseconds. The timer starts on first connect and stops when the observer is unsubscribed.
+
+```typescript
+public static fromInterval(delay: number): TObserver<number>
+```
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+// Emit a grouped batch of 3 ticks every second.
+Source.fromInterval(1_000)
+  .operator(Operator.group(3))
+  .connect((batch) => console.log('batch:', batch));
+// ["batch:", [0, 1, 2]], ["batch:", [3, 4, 5]], …
+```
+
+### fromDelay
+
+Emits a single `void` value after `delay` milliseconds and then disposes. Useful as a one-shot timer or a pause inside a larger pipeline.
+
+```typescript
+public static fromDelay(delay: number): TObserver<void>
+```
+
+```typescript
+import { Source } from 'functools-kit';
+
+Source.fromDelay(2_000)
+  .connect(() => console.log('2 seconds have passed'));
+```
+
+### fromValue
+
+Emits a single constant value (or the return value of a factory function) on first connect.
+
+```typescript
+public static fromValue<Data>(data: Data | (() => Data)): TObserver<Data>
+```
+
+```typescript
+import { Source } from 'functools-kit';
+
+Source.fromValue(() => Math.random())
+  .connect((n) => console.log('random:', n));
+```
+
+---
+
+## Hot vs cold sources
+
+The distinction between hot and cold observables matters when you need to share a single underlying resource across multiple subscribers.
+
+<Tabs>
+  <Tab title="Cold (default)">
+    A cold observable starts fresh for every subscriber. Each call to `.connect()` triggers the emitter function independently. This is the default for `Source.create` (alias for `createCold`).
+
+    ```typescript
+    import { Source } from 'functools-kit';
+
+    const cold = Source.createCold<number>((next) => {
+      console.log('started');
+      next(Math.random());
+      return () => console.log('stopped');
+    });
+
+    cold.connect((n) => console.log('subscriber A:', n));
+    cold.connect((n) => console.log('subscriber B:', n));
+    // "started" logs twice; A and B get different random values.
+    ```
+  </Tab>
+  <Tab title="Hot">
+    A hot observable starts immediately when it is created and shares the same emissions across all subscribers. Use `Source.createHot` when the underlying resource (a WebSocket, a DOM event) should only be set up once.
+
+    ```typescript
+    import { Source } from 'functools-kit';
+
+    const hot = Source.createHot<MessageEvent>((next) => {
+      const ws = new WebSocket('wss://example.com');
+      ws.onmessage = (e) => next(e);
+      return () => ws.close();
+    });
+
+    // Both subscribers receive the same messages.
+    hot.connect((e) => console.log('A:', e.data));
+    hot.connect((e) => console.log('B:', e.data));
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Combining streams
+
+### merge
+
+`Source.merge` accepts an array of up to ten typed observers and returns a single observer that forwards every emission from each source as it arrives. Use it to fan-in multiple independent streams.
+
+```typescript
+public static merge<A, B, ...>(observers: [TObserver<A>, TObserver<B>?, ...]): TObserver<A | B | ...>
+```
+
+```typescript
+import { Source, Subject } from 'functools-kit';
+
+const clicks = new Subject<MouseEvent>();
+const keystrokes = new Subject<KeyboardEvent>();
+
+Source.merge([clicks.toObserver(), keystrokes.toObserver()])
+  .connect((event) => console.log('user event:', event.type));
+```
+
+### join
+
+`Source.join` combines observers and emits a tuple once every source has emitted at least one value. By default, the buffer is cleared after each combined emission. Set `race: true` to keep the last known value from each source and emit on every update.
+
+```typescript
+public static join<A, B, ...>(
+  observers: [TObserver<A>, TObserver<B>?, ...],
+  options?: { buffer?: [...], race?: boolean }
+): TObserver<[A, B, ...]>
+```
+
+```typescript
+import { Source, Subject } from 'functools-kit';
+
+const user = new Subject<{ name: string }>();
+const prefs = new Subject<{ theme: string }>();
+
+Source.join([user.toObserver(), prefs.toObserver()])
+  .connect(([u, p]) => console.log(u.name, 'uses', p.theme));
+
+user.next({ name: 'Alice' });
+prefs.next({ theme: 'dark' }); // logs "Alice uses dark"
+```
+
+---
+
+## Operator transforms
+
+`Operator` provides higher-order functions that you pass to `.operator()`. Each returns a function of the shape `(target: TObserver<T>) => TObserver<R>`, so they compose cleanly.
+
+### take
+
+Emits only the first `count` values, then stops.
+
+```typescript
+public static take: <T>(count: number) => (target: TObserver<T>) => TObserver<T>
+```
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+Source.fromInterval(500)
+  .operator(Operator.take(3))
+  .connect(console.log); // 0, 1, 2 — then unsubscribes
+```
+
+### skip
+
+Discards the first `n` values and forwards everything after.
+
+```typescript
+public static skip: <T>(the: number) => (target: TObserver<T>) => TObserver<T>
+```
+
+```typescript
+Source.fromArray([1, 2, 3, 4, 5])
+  .operator(Operator.skip(2))
+  .connect(console.log); // 3, 4, 5
+```
+
+### distinct
+
+Filters out consecutive duplicate values. An optional `getCompareValue` function lets you extract the comparison key from complex objects.
+
+```typescript
+public static distinct: <T, V>(
+  getCompareValue?: (value: T) => V
+) => (target: TObserver<T>) => TObserver<T>
+```
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+Source.fromArray([1, 1, 2, 2, 3, 1])
+  .operator(Operator.distinct())
+  .connect(console.log); // 1, 2, 3, 1
+
+// With a key extractor:
+Source.fromArray([
+  { id: 1, label: 'a' },
+  { id: 1, label: 'b' }, // Same id — filtered out.
+  { id: 2, label: 'c' },
+])
+  .operator(Operator.distinct((item) => item.id))
+  .connect(console.log); // { id: 1, label: 'a' }, { id: 2, label: 'c' }
+```
+
+### group
+
+Buffers values into fixed-size arrays and emits one array per complete group. Partial groups are never emitted.
+
+```typescript
+public static group: <T>(by: number) => (target: TObserver<T>) => TObserver<T[]>
+```
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+Source.fromInterval(1_000)
+  .operator(Operator.group(3))
+  .connect(console.log);
+// After 3 s: [0, 1, 2]
+// After 6 s: [3, 4, 5]
+```
+
+### pair
+
+A specialisation of `group` that emits a sliding window of the last `by` values (default 2). Unlike `group`, pair emits on every new value once the window is full.
+
+```typescript
+public static pair: <T>(by?: number) => (target: TObserver<T>) => TObserver<[T, T]>
+```
+
+```typescript
+Source.fromInterval(1_000)
+  .operator(Operator.pair())
+  .connect(console.log);
+// [0, 1], [1, 2], [2, 3], …
+```
+
+---
+
+## Composing operators in a pipeline
+
+Operators chain naturally through `.operator()`. The example below reads an array, deduplicates consecutive values, skips the first two, then takes the next five:
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+const data = [5, 5, 1, 2, 2, 3, 4, 4, 5, 6, 7];
+
+Source.fromArray(data)
+  .operator(Operator.distinct())   // 5, 1, 2, 3, 4, 5, 6, 7
+  .operator(Operator.skip(2))      // 2, 3, 4, 5, 6, 7
+  .operator(Operator.take(4))      // 2, 3, 4, 5
+  .connect(console.log);
+```
+
+For interval-based pipelines, `group` lets you process values in fixed batches rather than one at a time:
+
+```typescript
+import { Source, Operator } from 'functools-kit';
+
+Source.fromInterval(200)
+  .operator(Operator.skip(1))   // Drop the zeroth tick.
+  .operator(Operator.group(4))  // Collect ticks in groups of 4.
+  .map((batch) => batch.reduce((sum, n) => sum + n, 0))
+  .connect((sum) => console.log('batch sum:', sum));
+```

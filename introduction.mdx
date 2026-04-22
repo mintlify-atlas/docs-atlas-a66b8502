@@ -1,0 +1,114 @@
+---
+title: "functools-kit: async, reactive, and functional TypeScript"
+description: "functools-kit covers async HOFs, reactive streams, caching, pub/sub, document iteration, and functional helpers — all in one zero-dependency TypeScript library."
+---
+
+functools-kit is a zero-runtime-dependency TypeScript library that consolidates the async orchestration, reactive programming, and functional utility patterns you would otherwise assemble from several separate packages. It ships with a clean, type-safe API and is verified by 761 tests covering both functional correctness and async exception propagation.
+
+## What functools-kit does
+
+The library is organized into six broad areas, each designed to compose cleanly with the others.
+
+<Columns cols={2}>
+  <Card title="Async control flow" icon="arrows-spin" href="/guides/async-basics">
+    `cancelable`, `queued`, `execpool`, `retry`, `lock`, `singlerun`, `afterinit`, `timeout`, `schedule` — wrappers for concurrent, sequential, and fault-tolerant async operations.
+  </Card>
+  <Card title="Reactive streams" icon="wave-sine" href="/guides/observer-subject">
+    `Observer`, `Subject`, `BehaviorSubject`, `Source`, and `Operator` with `map`, `filter`, `debounce`, `merge`, `join`, `take`, `skip`, `distinct`, and more — build reactive pipelines without extra dependencies.
+  </Card>
+  <Card title="Smart caching" icon="database" href="/guides/memoize-cached">
+    `memoize`, `cached`, `ttl`, `router`, `rate` — cache results by key function, by argument change, or with time-to-live expiry. Per-key routing prevents memory leaks.
+  </Card>
+  <Card title="Pub/sub messaging" icon="envelope" href="/guides/pubsub">
+    `pubsub` with pluggable `PubsubArrayAdapter` and `PubsubMapAdapter` — message-driven workflows with backpressure and lifecycle hooks (`onBegin`, `onProcess`, `onEnd`, `onError`, `onDestroy`).
+  </Card>
+  <Card title="Document iteration" icon="layer-group" href="/guides/document-iteration">
+    `iterateDocuments`, `iterateUnion`, `iterateList`, `paginateDocuments`, `filterDocuments`, `mapDocuments` — async generator-based document pipelines with offset/cursor pagination support.
+  </Card>
+  <Card title="Functional helpers" icon="function" href="/api/functional-helpers">
+    `compose`, `match`, `and`, `or`, `not`, `first`, `last`, `join`, `truely`, `str`, `has`, `trycatch`, `sleep`, `createAwaiter`, `deepFlat` — compose functions and work with arrays and strings in a functional style.
+  </Card>
+</Columns>
+
+## Key exports by category
+
+### Async HOFs
+
+| Export | Description |
+|---|---|
+| `cancelable` | Wraps a promise-returning function with cancellation support; returns `CANCELED_PROMISE_SYMBOL` when cancelled |
+| `queued` | Serializes async calls into a promise queue |
+| `execpool` | Limits concurrent executions to a configurable pool size |
+| `retry` | Retries on failure with configurable attempt count and delay |
+| `lock` | Functional mutex — serializes access to shared async resources |
+| `singlerun` | Runs only once until explicitly cleared with `.clear()` |
+| `afterinit` | Skips the first invocation; runs all subsequent calls normally |
+| `timeout` | Resolves to `TIMEOUT_SYMBOL` if the wrapped call takes too long |
+| `schedule` | Defers execution using a caller-supplied scheduler callback |
+| `obsolete` | Marks a function as deprecated with a runtime warning |
+
+### Caching
+
+| Export | Description |
+|---|---|
+| `memoize` | Cache by a key function; supports `clear()` |
+| `cached` | Cache invalidated by argument change detection |
+| `ttl` | Time-to-live cache with optional garbage collection |
+| `router` | Per-key cached memoization — routes each key to its own cached result |
+| `rate` | Rate limiting by key with `RateError` on breach |
+
+### Reactive
+
+| Export | Description |
+|---|---|
+| `Observer` | Full observable implementation with operator chaining |
+| `Subject` | Observable + subscriber — push values with `.next()` |
+| `BehaviorSubject` | Subject that replays its current value to new subscribers |
+| `Source` | Factory for observers: `fromArray`, `fromPromise`, `fromInterval`, `merge`, `join`, `pipe` |
+| `Operator` | Stream operators: `take`, `skip`, `distinct`, `group`, `pair`, `count`, `strideTricks`, `retry` |
+| `waitForNext` | Await a subject value that satisfies a predicate |
+
+### Data structures
+
+| Export | Description |
+|---|---|
+| `Lock` | Class-based mutex with `acquireLock` / `releaseLock`; throws on extra release |
+| `SortedArray` | Array sorted by numeric score with `push`, `pop`, `take` |
+| `LimitedSet` | `Set` capped at a configurable max size with LRU eviction |
+| `LimitedMap` | `Map` capped at a configurable max size with LRU eviction |
+| `ToolRegistry` | Type-safe runtime registry with `register` / `get` |
+
+## Test coverage
+
+functools-kit ships with **761 tests** across three categories:
+
+- **Spec tests** — functional correctness for every module, including `Observer`, `Subject`, `BehaviorSubject`, `Source`, `Operator`, all async HOFs, caching utilities, data structures, string/array helpers, and document iteration APIs.
+- **E2E tests** — async exception propagation through every operator and source type, including multi-hop chains, scoped unhandled-rejection guards, and integration pipelines modelling ETL, IoT, and event-sourcing patterns.
+- **Integration tests** — 40 Subject-based and Source-based pipelines verifying throw propagation at every operator position, repeated with `process.on("unhandledRejection")` guards to confirm no exceptions leak.
+
+## Ecosystem
+
+functools-kit is used as a core dependency in several production open-source projects.
+
+<Columns cols={2}>
+  <Card title="agent-swarm-kit" icon="robot" href="https://github.com/tripolskypetr/agent-swarm-kit">
+    Multi-agent AI orchestration framework. Uses functools-kit for TTL caching, string utilities, and observable coordination.
+  </Card>
+  <Card title="backtest-kit" icon="chart-line" href="https://github.com/tripolskypetr/backtest-kit">
+    TypeScript framework for backtesting trading strategies with clean architecture and real-time execution.
+  </Card>
+  <Card title="react-declarative" icon="react" href="https://github.com/react-declarative/react-declarative">
+    Declarative React application framework. functools-kit originated as part of this project's utility layer.
+  </Card>
+</Columns>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Install functools-kit" icon="box" href="/installation">
+    Add the package to your project with npm, yarn, or pnpm and configure TypeScript.
+  </Card>
+  <Card title="Quickstart examples" icon="rocket" href="/quickstart">
+    Working TypeScript examples for the five most common patterns in under five minutes.
+  </Card>
+</Columns>

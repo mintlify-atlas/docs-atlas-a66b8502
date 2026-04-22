@@ -1,0 +1,81 @@
+---
+title: "rate — per-key rate limiting for async functions"
+description: "Enforce a minimum delay between calls per key. Throws RateError when exceeded. Supports gc() for entry cleanup and IControlMemoize for manual cache control."
+---
+
+`rate` prevents a function from being called too frequently for a given key. If the function is called again before `delay` milliseconds have elapsed since the last call for the same key, it throws a `RateError`. This is useful for protecting external API calls, database writes, or any expensive operation from being hammered.
+
+## Signature
+
+```typescript
+export class RateError extends Error {
+  type: "rate-error";
+}
+
+export interface IClearableRate<K = string> extends IClearableMemoize<K> {
+  gc: () => void;
+}
+
+export const rate = <T extends (...args: any[]) => any, K = string>(
+  run: T,
+  options?: {
+    key?: (args: Parameters<T>) => K;
+    rateName?: string;
+    delay?: number;
+  }
+): T & IClearableRate<K> & IControlMemoize<K, ReturnType<T>>
+```
+
+## Parameters
+
+<ParamField path="run" type="T" required>
+  The function to rate-limit.
+</ParamField>
+
+<ParamField path="key" type="(args: Parameters<T>) => K">
+  Derives the per-key rate limit bucket from arguments. Defaults to a shared constant (global rate limit).
+</ParamField>
+
+<ParamField path="rateName" type="string">
+  Name used in the `RateError` message for debugging. Defaults to `"unknown-rate"`.
+</ParamField>
+
+<ParamField path="delay" type="number">
+  Minimum milliseconds between allowed calls per key. Defaults to `1000`.
+</ParamField>
+
+## Return value
+
+Returns the wrapped function with:
+- `.clear(key?)` — reset the rate limit for a key or all keys
+- `.gc()` — sweep and evict expired rate-limit entries
+- `.add(key, value)` — manually insert a rate-limit entry (stamped as now)
+
+## Example
+
+```typescript
+import { rate, RateError } from "functools-kit";
+
+const sendEmail = rate(
+  async (userId: string, message: string) => emailService.send(userId, message),
+  {
+    key: ([userId]) => userId,
+    rateName: "sendEmail",
+    delay: 5_000, // max once per 5 seconds per user
+  }
+);
+
+try {
+  await sendEmail("u-123", "Hello");
+  await sendEmail("u-123", "Again"); // throws RateError if within 5s
+} catch (err) {
+  if (err instanceof RateError) {
+    console.warn("Rate limit exceeded:", err.message);
+  }
+}
+```
+
+## Related
+
+- [ttl](/api/ttl) — time-expiring result cache
+- [throttle](/api/functional-helpers) — timing-based call suppression

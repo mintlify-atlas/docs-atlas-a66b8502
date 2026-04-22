@@ -1,0 +1,70 @@
+---
+title: "schedule — deferred execution with backpressure"
+description: "schedule wraps an async function to defer and coalesce calls while the function is running, queuing the latest arguments and re-executing once complete."
+---
+
+`schedule` solves a common pattern: you want to call a function but if it's already running, you don't want to queue every call — you want to remember the latest arguments and re-run once the current execution finishes. This is useful for things like debounced save operations that should always commit the freshest state.
+
+## Signature
+
+```typescript
+export interface IScheduleParams<P extends any[]> {
+  onSchedule: (args: P) => Promise<void>;
+  delay?: number;
+}
+
+export interface IWrappedScheduleFn<T = any, P extends any[] = any> {
+  (...args: P): Promise<T | null>;
+  clear(): void;
+}
+
+export const schedule = <T = any, P extends any[] = any[]>(
+  run: (...args: P) => Promise<T>,
+  { onSchedule, delay = 1000 }: IScheduleParams<P>
+): IWrappedScheduleFn<T, P>
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The async function to wrap. Only one execution runs at a time.
+</ParamField>
+
+<ParamField path="onSchedule" type="(args: P) => Promise<void>" required>
+  Called when a new call arrives while `run` is in progress. Use this to persist or log the incoming arguments.
+</ParamField>
+
+<ParamField path="delay" type="number">
+  Polling interval in milliseconds to check whether `run` has finished. Defaults to `1000`.
+</ParamField>
+
+## Return value
+
+Returns `IWrappedScheduleFn<T, P>` — an async function that returns `Promise<T | null>`. Includes a `.clear()` method that discards any queued arguments without running them.
+
+## Example
+
+```typescript
+import { schedule } from "functools-kit";
+
+const saveDocument = schedule(
+  async (docId: string, content: string) => {
+    await db.save(docId, content);
+  },
+  {
+    onSchedule: async ([docId, content]) => {
+      console.log(`Queued save for ${docId}`);
+    },
+    delay: 500,
+  }
+);
+
+// Rapid calls: only the last content is committed
+await saveDocument("doc-1", "draft A");
+await saveDocument("doc-1", "draft B"); // this is what gets saved
+```
+
+## Related
+
+- [singlerun](/api/singlerun) — run only once until cleared
+- [queued](/api/queued) — serialize all calls into a queue

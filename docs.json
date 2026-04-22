@@ -1,122 +1,125 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "functools-kit",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#848c8e",
+    "light": "#11161e",
+    "dark": "#cfd0d2"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/2b01fe20-c04b-4a1d-a2f9-1d2789c50a7a.jpg",
+  "logo": {
+    "light": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg",
+    "dark": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/tripolskypetr/functools-kit"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/tripolskypetr/functools-kit"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Async Control Flow",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "guides/async-basics",
+              "guides/cancelable",
+              "guides/queued-execpool",
+              "guides/retry-timeout"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Reactive Programming",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/observer-subject",
+              "guides/source-operators",
+              "guides/pubsub"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Caching & Rate Limiting",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/memoize-cached",
+              "guides/ttl-router",
+              "guides/rate-limiting"
+            ]
+          },
+          {
+            "group": "Data & Iteration",
+            "pages": [
+              "guides/document-iteration",
+              "guides/pagination",
+              "guides/data-structures"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Async HOFs",
             "pages": [
-              "api-reference/introduction"
+              "api/cancelable",
+              "api/queued",
+              "api/execpool",
+              "api/retry",
+              "api/lock",
+              "api/singlerun",
+              "api/afterinit",
+              "api/schedule",
+              "api/timeout",
+              "api/obsolete"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Caching",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/memoize",
+              "api/cached",
+              "api/ttl",
+              "api/router",
+              "api/rate"
+            ]
+          },
+          {
+            "group": "Reactive",
+            "pages": [
+              "api/observer",
+              "api/subject",
+              "api/behavior-subject",
+              "api/source",
+              "api/operator"
+            ]
+          },
+          {
+            "group": "Utilities & Helpers",
+            "pages": [
+              "api/functional-helpers",
+              "api/string-array",
+              "api/object-utils",
+              "api/data-structures"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

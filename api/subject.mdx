@@ -1,0 +1,103 @@
+---
+title: "Subject — multicast event emitter for reactive streams"
+description: "Subject is a hot multicast emitter: push values with next(), chain operators like map and filter, and subscribe or await the next emission with toPromise()."
+---
+
+`Subject<Data>` is a hot, multicast event source. You call `subject.next(value)` to push a value downstream to all current subscribers. Unlike a plain `EventEmitter`, `Subject` exposes the full `Observer` operator API, so you can chain `map`, `filter`, `debounce`, and any other operator on its stream before subscribing.
+
+## Class
+
+```typescript
+class Subject<Data = void> {
+  // Emit a value to all subscribers
+  next(data: Data): Promise<void>;
+
+  // Subscribe directly
+  subscribe(callbackfn: (value: Data) => void): () => void;
+  unsubscribeAll(): void;
+
+  // Operator chain
+  map<T>(callbackfn: (value: Data) => T): Observer<T>;
+  filter(predicate: (value: Data) => boolean): Observer<Data>;
+  once(): Observer<Data>;
+
+  // Conversions
+  toObserver(): Observer<Data>;
+  toPromise(): Promise<Data>;
+}
+```
+
+## Key methods
+
+<ParamField path="next" type="(data: Data) => Promise<void>">
+  Push a value to all subscribers. Returns a promise that resolves once all async subscribers have settled. Throws propagated from async subscribers will reject.
+</ParamField>
+
+<ParamField path="subscribe" type="(callbackfn: (value: Data) => void) => () => void">
+  Add a raw subscriber. Returns an unsubscribe function.
+</ParamField>
+
+<ParamField path="unsubscribeAll" type="() => void">
+  Remove all current subscribers.
+</ParamField>
+
+<ParamField path="toObserver" type="() => Observer<Data>">
+  Get the underlying `Observer` to chain operators before subscribing.
+</ParamField>
+
+<ParamField path="toPromise" type="() => Promise<Data>">
+  Await the next emitted value. Resolves once and unsubscribes automatically.
+</ParamField>
+
+## Example
+
+```typescript
+import { Subject } from "functools-kit";
+
+const events = new Subject<{ type: string; payload: any }>();
+
+// Chain operators
+const errorStream = events
+  .filter(e => e.type === "error")
+  .map(e => e.payload);
+
+const unsubscribe = errorStream.connect(payload => {
+  console.error("Error event:", payload);
+});
+
+// Emit values
+await events.next({ type: "info", payload: "started" });
+await events.next({ type: "error", payload: new Error("oops") }); // logged
+
+// Await the next error
+const nextError = await events
+  .filter(e => e.type === "error")
+  .toPromise();
+```
+
+## EventEmitter
+
+`EventEmitter` is the low-level event bus used internally by `Observer`. It's exported for cases where you need named-channel event dispatch without the reactive operator layer.
+
+```typescript
+import { EventEmitter } from "functools-kit";
+
+const emitter = new EventEmitter();
+const EVENT = Symbol("my-event");
+
+const unsub = emitter.subscribe(EVENT, (data) => console.log(data));
+emitter.emit(EVENT, { hello: "world" });
+emitter.once(EVENT, (data) => console.log("once:", data));
+emitter.hasListeners(EVENT); // true
+unsub(); // unsubscribe
+```
+
+<Tip>
+  Prefer `Subject` for new reactive code — it composes with `Observer` operators and supports `await`. Use `EventEmitter` only when you need symbol-keyed named channels with minimal overhead.
+</Tip>
+
+## Related
+
+- [Observer](/api/observer) — the reactive stream type returned by operators
+- [BehaviorSubject](/api/behavior-subject) — Subject with current value replay
+- [Source](/api/source) — factory methods including `fromSubject`

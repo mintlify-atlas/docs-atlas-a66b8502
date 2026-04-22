@@ -1,0 +1,62 @@
+---
+title: "timeout — wrap async functions with a time limit"
+description: "timeout races an async function against a timer and returns TIMEOUT_SYMBOL if the deadline passes first — no exceptions thrown, no extra try/catch needed."
+---
+
+`timeout` wraps any async function so it races against a deadline. If the original function doesn't resolve before `delay` milliseconds, the wrapper resolves with `TIMEOUT_SYMBOL` — a unique symbol you can check in place of a thrown error. This makes timeout handling explicit and avoids try/catch noise.
+
+## Signature
+
+```typescript
+export const TIMEOUT_SYMBOL: unique symbol;
+
+export const timeout = <T = any, P extends any[] = any[]>(
+  run: (...args: P) => Promise<T>,
+  delay = 30_000
+) => (...args: P) => Promise<T | typeof TIMEOUT_SYMBOL>
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The async function to wrap with a timeout.
+</ParamField>
+
+<ParamField path="delay" type="number">
+  Maximum time in milliseconds to wait before returning `TIMEOUT_SYMBOL`. Defaults to `30000` (30 seconds).
+</ParamField>
+
+## Return value
+
+Returns a wrapped function with the same signature as `run`. The return type is `Promise<T | typeof TIMEOUT_SYMBOL>`. Always check for `TIMEOUT_SYMBOL` before using the result.
+
+## Example
+
+```typescript
+import { timeout, TIMEOUT_SYMBOL } from "functools-kit";
+
+const fetchWithTimeout = timeout(
+  async (url: string) => {
+    const res = await fetch(url);
+    return res.json();
+  },
+  5_000 // 5 second limit
+);
+
+const result = await fetchWithTimeout("/api/data");
+
+if (result === TIMEOUT_SYMBOL) {
+  console.warn("Request timed out");
+} else {
+  console.log(result);
+}
+```
+
+<Note>
+  `timeout` uses `Promise.race` internally. The original async operation continues running after the timeout — it is not cancelled. Use [cancelable](/api/cancelable) if you need true cancellation.
+</Note>
+
+## Related
+
+- [cancelable](/api/cancelable) — cancel in-flight async operations
+- [retry](/api/retry) — retry failed operations automatically

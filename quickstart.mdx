@@ -1,80 +1,189 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Get started with functools-kit"
+description: "Learn how to use functools-kit async HOFs, reactive streams, and caching utilities with working TypeScript examples in under 5 minutes."
 ---
 
-## Get started in three steps
+This page walks through the five most common patterns in functools-kit using complete, runnable TypeScript examples taken directly from the library. Each example shows the import and a realistic usage scenario. You can pick up any pattern independently — they do not depend on each other.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  Make sure you have [installed functools-kit](/installation) and configured TypeScript 5.0+ before running these examples.
+</Note>
 
-### Step 1: Set up your local environment
+## Debounce and throttle
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Use `debounce` when you want to delay a function call until after a quiet period, and `throttle` when you want to allow at most one call per time window. Both are common for handling UI events or rate-limiting outbound requests.
 
-### Step 2: Deploy your changes
+<Tabs>
+  <Tab title="Debounce">
+    `debounce` waits for the specified millisecond delay after the last call before executing. Useful for search inputs, resize handlers, or any event that fires in bursts.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```typescript
+    import { debounce } from "functools-kit";
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    const onResize = debounce(() => recalcLayout(), 300);
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    // Attach to a resize event — recalcLayout runs only after
+    // the user stops resizing for 300 ms
+    window.addEventListener("resize", onResize);
 
-### Step 3: Go live
+    // Call .clear() to cancel a pending invocation
+    // onResize.clear();
+    ```
+  </Tab>
+  <Tab title="Throttle">
+    `throttle` executes on the leading edge and then ignores subsequent calls until the time window expires. Useful for scroll handlers, mousemove tracking, or rate-limiting API calls.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```typescript
+    import { throttle } from "functools-kit";
+
+    const onScroll = throttle(() => updateHeader(), 100);
+
+    // updateHeader fires immediately on the first scroll event,
+    // then at most once every 100 ms
+    window.addEventListener("scroll", onScroll);
+
+    // Cancel any pending leading-edge call
+    // onScroll.clear();
+    ```
+  </Tab>
+</Tabs>
+
+## Memoize with TTL
+
+`ttl` wraps an async function and caches its return value per key for a configurable duration. When the TTL expires, the next call for that key re-executes the underlying function. This is the right tool for caching remote data that changes over time.
+
+```typescript
+import { ttl } from "functools-kit";
+
+const getUser = ttl(
+  async (userId: string) => fetchUser(userId),
+  { key: ([id]) => id, timeout: 60_000 }
+);
+
+// First call fetches from the origin
+const user = await getUser("user-123");
+
+// Subsequent calls within 60 s return the cached value
+const same = await getUser("user-123");
+
+// After 60 000 ms, the cache expires and the next call
+// re-fetches from the origin
+```
+
+<Tip>
+  The `key` function receives the arguments tuple and must return a string that uniquely identifies the cache entry. Use it to support multiple distinct cache slots — one per `userId`, for example.
+</Tip>
+
+For caching that should never expire, use [`memoize`](/api/memoize) instead. For argument-change-based invalidation without a time limit, use [`cached`](/api/cached).
+
+## Cancelable promises
+
+`cancelable` wraps an async function so that any in-flight call can be cancelled. The cancelled call resolves to the special `CANCELED_PROMISE_SYMBOL` sentinel rather than throwing, which makes it easy to handle gracefully.
+
+```typescript
+import { cancelable, CANCELED_PROMISE_SYMBOL } from "functools-kit";
+
+const fetchData = cancelable(async (url: string) => {
+  const res = await fetch(url);
+  return res.json();
+});
+
+// Start a fetch
+const result = await fetchData("/api/data");
+
+// Guard against the cancelled case before using the result
+if (result === CANCELED_PROMISE_SYMBOL) return;
+
+console.log(result);
+
+// Cancel any currently in-flight call — e.g. on component unmount
+fetchData.cancel();
+```
+
+<Warning>
+  Always check for `CANCELED_PROMISE_SYMBOL` before using the result. Failing to do so means your code may try to process `CANCELED_PROMISE_SYMBOL` as real data if a cancellation occurs.
+</Warning>
+
+A common pattern is to call `fetchData.cancel()` in cleanup logic — for example, in a React `useEffect` cleanup function or when navigating away from a page — and then check the sentinel at the top of your handler.
+
+## Observer and reactive streams
+
+`Subject` is the core reactive primitive. It lets you push values with `.next()` and compose transformations using operators like `.filter()`, `.map()`, and `.debounce()` before connecting a subscriber.
+
+```typescript
+import { Subject } from "functools-kit";
+
+const subject = new Subject<number>();
+
+subject
+  .filter(n => n % 2 === 0)   // only even numbers
+  .map(n => n * 2)             // double them
+  .debounce(200)               // wait for a 200 ms quiet period
+  .connect(value => console.log(value));
+
+subject.next(1); // filtered out (odd)
+subject.next(2); // passes filter → 4, debounced
+subject.next(4); // passes filter → 8, debounced; logs 8 after 200 ms
+```
+
+For more advanced source creation and stream composition, use `Source` and `Operator`:
+
+```typescript
+import { Source, Operator } from "functools-kit";
+
+// Deduplicate, skip the first, and take three from a static array
+Source.fromArray([1, 2, 3, 2, 1, 4, 5])
+  .operator(Operator.distinct())  // remove duplicates: 1, 2, 3, 4, 5
+  .operator(Operator.skip(1))     // skip first: 2, 3, 4, 5
+  .operator(Operator.take(3))     // take three: 2, 3, 4
+  .connect(value => console.log(value));
+
+// Emit values every 100 ms and batch them into groups of three
+Source.fromInterval(100)
+  .operator(Operator.group(3))    // [0,1,2], [3,4,5], ...
+  .connect(batch => console.log(batch));
+```
+
+<Tip>
+  Use `BehaviorSubject` instead of `Subject` when late subscribers need to receive the current value immediately on subscription — common for state management patterns.
+</Tip>
+
+## Execution pool
+
+`execpool` limits the number of async function calls that run concurrently. Calls that arrive when the pool is full are queued and executed as slots become available. This prevents overwhelming downstream services or exhausting system resources.
+
+```typescript
+import { execpool } from "functools-kit";
+
+const processFile = execpool(
+  async (path: string) => heavyProcessing(path),
+  { maxExec: 4, delay: 50 }
+);
+
+const files = ["a.dat", "b.dat", "c.dat", "d.dat", "e.dat", "f.dat"];
+
+// All six calls are submitted immediately, but at most four
+// run concurrently. The remaining two wait in the queue.
+await Promise.all(files.map(f => processFile(f)));
+```
+
+The `delay` option (in milliseconds) adds a gap between starting each queued execution, which is useful for APIs that enforce a rate limit on top of a concurrency limit.
+
+For strict sequential ordering instead of a pool, use [`queued`](/api/queued). For mutual exclusion in a critical section, use [`Lock`](/api/lock).
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Columns cols={2}>
+  <Card title="Async control flow" icon="arrows-spin" href="/guides/async-basics">
+    Explore queued, retry, lock, singlerun, afterinit, and other async HOFs in depth.
+  </Card>
+  <Card title="Reactive programming" icon="wave-sine" href="/guides/observer-subject">
+    Learn the full Observer, Subject, BehaviorSubject, Source, and Operator APIs.
+  </Card>
+  <Card title="Caching and rate limiting" icon="database" href="/guides/memoize-cached">
+    Understand when to use memoize, cached, ttl, router, and rate.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/cancelable">
+    Full type signatures and parameter docs for every export.
+  </Card>
+</Columns>

@@ -1,0 +1,146 @@
+---
+title: "Install and configure functools-kit"
+description: "Add functools-kit to a TypeScript project with npm, yarn, or pnpm. Requires TypeScript 5.0+ as a peer dependency. Supports ESM and CommonJS."
+---
+
+functools-kit has zero runtime dependencies and ships both ESM and CommonJS builds from the same package. The only peer dependency is TypeScript 5.0 or later. Follow the steps below to add it to any Node.js or bundler-based TypeScript project.
+
+<Steps>
+  <Step title="Install the package">
+    Choose your package manager. All three install the same package from the npm registry.
+
+    <CodeGroup>
+
+    ```bash npm
+    npm install functools-kit
+    ```
+
+    ```bash yarn
+    yarn add functools-kit
+    ```
+
+    ```bash pnpm
+    pnpm add functools-kit
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Verify your TypeScript version">
+    functools-kit requires TypeScript 5.0 or later (`"typescript": "^5.0.0"` in `peerDependencies`). Check your installed version:
+
+    ```bash
+    npx tsc --version
+    ```
+
+    If the output is below `5.0.0`, upgrade TypeScript:
+
+    ```bash npm
+    npm install --save-dev typescript@latest
+    ```
+
+    <Warning>
+      Using TypeScript 4.x will produce type errors. The library uses TypeScript 5 features including variadic tuple improvements and updated conditional type inference.
+    </Warning>
+  </Step>
+
+  <Step title="Configure tsconfig.json">
+    functools-kit uses standard TypeScript module resolution. A minimal `tsconfig.json` that works with the package:
+
+    ```json tsconfig.json
+    {
+      "compilerOptions": {
+        "target": "ES2020",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "esModuleInterop": true,
+        "lib": ["ES2020"]
+      }
+    }
+    ```
+
+    <Note>
+      If you are using an older project setup with `"module": "CommonJS"` and `"moduleResolution": "Node"`, functools-kit will still work — the package exports both `.cjs` and `.mjs` builds and falls back to the CJS entry point automatically.
+    </Note>
+  </Step>
+
+  <Step title="Import and use">
+    Import named exports directly from `"functools-kit"`. Tree-shaking is supported for bundlers that consume the ESM build.
+
+    ```typescript
+    import { cancelable, Subject, ttl } from "functools-kit";
+
+    // Cancelable async fetch
+    const fetchData = cancelable(async (url: string) => {
+      const res = await fetch(url);
+      return res.json();
+    });
+
+    // Reactive stream
+    const subject = new Subject<number>();
+    subject.filter(n => n > 0).connect(console.log);
+
+    // TTL cache
+    const getUser = ttl(
+      async (userId: string) => fetchUser(userId),
+      { key: ([id]) => id, timeout: 60_000 }
+    );
+    ```
+  </Step>
+</Steps>
+
+## ESM and CommonJS support
+
+The `package.json` `exports` field provides separate entry points for each module format:
+
+| Condition | Entry point |
+|---|---|
+| `import` (ESM) | `build/index.mjs` |
+| `require` (CJS) | `build/index.cjs` |
+| `types` | `types.d.ts` |
+
+Node.js 12+ and all major bundlers (Vite, webpack, Rollup, esbuild) resolve the correct build automatically based on the calling module's format.
+
+<Tip>
+  If you use a monorepo with mixed ESM and CJS packages, functools-kit handles both without any additional configuration on your side.
+</Tip>
+
+## Verifying the installation
+
+After installing, run a quick smoke test to confirm the package resolves correctly:
+
+```typescript verify.ts
+import { randomString, sleep, Subject } from "functools-kit";
+
+const id = randomString();
+console.log("Generated ID:", id);
+
+const subject = new Subject<string>();
+subject.connect(value => console.log("Received:", value));
+subject.next("hello functools-kit");
+```
+
+Run it with:
+
+```bash
+npx ts-node verify.ts
+```
+
+You should see output similar to:
+
+```
+Generated ID: a3f8c2d1-...
+Received: hello functools-kit
+```
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Quickstart examples" icon="rocket" href="/quickstart">
+    Working code for debounce, TTL caching, cancelable promises, reactive streams, and execution pools.
+  </Card>
+  <Card title="Async control flow" icon="arrows-spin" href="/guides/async-basics">
+    Deep dive into cancelable, queued, execpool, retry, lock, and singlerun.
+  </Card>
+</Columns>

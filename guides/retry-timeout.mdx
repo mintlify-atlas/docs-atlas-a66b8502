@@ -1,0 +1,358 @@
+---
+title: "Retry, timeout, and deferred execution"
+description: "Use retry, timeout, schedule, afterinit, singlerun, and obsolete to make async functions resilient, bounded, and lifecycle-aware in functools-kit."
+---
+
+Resilient async code needs more than just concurrency control. You also need to handle flaky operations that should be retried, calls that must not run forever, execution that should be deferred until the right moment, and deprecated APIs that need to be flagged. functools-kit covers all of these with a focused set of HOFs.
+
+## retry
+
+`retry` wraps an async function and re-runs it automatically whenever it throws, up to a configurable `count` of attempts. An optional `delay` is added between attempts. An optional `condition` predicate lets you restrict retrying to specific error types.
+
+### Type signature
+
+```typescript
+export interface IWrappedRetryFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    cancel(): void;
+    clear(): void;
+}
+
+export const retry: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    count?: number,                         // Default: 5
+    delay?: number,                         // Default: 1000 ms
+    condition?: (error: Error) => boolean   // Default: () => true
+) => IWrappedRetryFn<T, P>;
+```
+
+`retry` is built on top of `queued`, so it also inherits `.cancel()` and `.clear()` to abandon in-progress retry loops.
+
+### How it works
+
+On each failure, `retry` checks the `condition` predicate. If `condition` returns `false`, the error is re-thrown immediately without retrying. Otherwise it sleeps for `delay` ms and tries again. When the remaining attempt count reaches zero, the last error is thrown.
+
+### Example: flaky network call
+
+```typescript
+import { retry, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const fetchWithRetry = retry(
+    async (url: string) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+    },
+    3,   // Retry up to 3 times.
+    500, // Wait 500 ms between attempts.
+);
+
+const data = await fetchWithRetry('/api/resource');
+if (data === CANCELED_PROMISE_SYMBOL) {
+    // The call was cancelled mid-retry.
+}
+```
+
+### Example: retry only on transient errors
+
+```typescript
+import { retry } from 'functools-kit';
+
+class NetworkError extends Error {}
+class AuthError extends Error {}
+
+const safeCall = retry(
+    apiClient.getData,
+    5,
+    1_000,
+    (error) => error instanceof NetworkError // Don't retry auth errors.
+);
+```
+
+<Warning>
+  The `delay` parameter adds a sleep between each attempt. With `count = 5` and `delay = 1000`, a consistently failing call can block for up to 4 seconds before throwing. Keep this in mind when wrapping user-facing operations.
+</Warning>
+
+---
+
+## timeout
+
+`timeout` races the wrapped function against a timer. If the function does not resolve within `delay` ms, the race resolves with `TIMEOUT_SYMBOL` and the underlying promise is abandoned.
+
+### Type signature
+
+```typescript
+export const TIMEOUT_SYMBOL: unique symbol;
+
+export const timeout: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    delay?: number  // Default: 30 000 ms (30 s)
+) => (...args: P) => Promise<T | typeof TIMEOUT_SYMBOL>;
+```
+
+### Example: bounded fetch
+
+```typescript
+import { timeout, TIMEOUT_SYMBOL } from 'functools-kit';
+
+const fetchWithTimeout = timeout(
+    async (url: string) => {
+        const res = await fetch(url);
+        return res.json();
+    },
+    5_000 // Abort after 5 seconds.
+);
+
+const result = await fetchWithTimeout('/api/slow-endpoint');
+
+if (result === TIMEOUT_SYMBOL) {
+    console.warn('Request timed out');
+} else {
+    processResult(result);
+}
+```
+
+<Note>
+  `timeout` does not abort the underlying `Promise` — it simply stops waiting for it. If you need true cancellation (e.g. aborting a `fetch`), combine `timeout` with an `AbortController` in your wrapped function.
+</Note>
+
+### Combining retry and timeout
+
+```typescript
+import { retry, timeout, TIMEOUT_SYMBOL, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const resilientFetch = retry(
+    timeout(fetchResource, 3_000), // Each attempt has a 3 s deadline.
+    3,                             // Retry up to 3 times.
+    500,
+    // Treat a timeout as a retryable condition.
+    (_error) => true,
+);
+```
+
+---
+
+## schedule
+
+`schedule` defers work that arrives while an execution is already in progress. Instead of queuing every call (like `queued` does), it discards intermediate calls and only runs the most recent arguments after the current execution finishes. An `onSchedule` callback is invoked for each discarded call so you can log or react to it.
+
+### Type signature
+
+```typescript
+export interface IScheduleParams<P extends any[]> {
+    onSchedule: (args: P) => Promise<void>;
+    delay?: number; // Polling interval while waiting. Default: 1000 ms.
+}
+
+export interface IWrappedScheduleFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T | null>;
+    clear(): void;
+}
+
+export const schedule: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    params: IScheduleParams<P>
+) => IWrappedScheduleFn<T, P>;
+```
+
+### How it works
+
+Internally, `schedule` uses `singlerun` to prevent re-entrance. When a call arrives during an active execution, the arguments are stored in `argsLast` (overwriting any previously scheduled args) and `onSchedule` is called via a `queued` helper to notify you. Once the current execution finishes, the last stored args (if any) are passed to a fresh execution.
+
+### Example: live document save
+
+```typescript
+import { schedule } from 'functools-kit';
+
+const saveDocument = schedule(
+    async (doc: Document) => {
+        await db.save(doc);
+    },
+    {
+        onSchedule: async ([doc]) => {
+            console.log(`Save scheduled for document ${doc.id}`);
+        },
+        delay: 500,
+    }
+);
+
+// Rapid edits coalesce: only the last edit in a burst is persisted.
+saveDocument(edit1);
+saveDocument(edit2);
+saveDocument(edit3); // Only this one will be saved after the current run.
+```
+
+<Tip>
+  Use `schedule` instead of `queued` when intermediate results are irrelevant and you only care about the final state — for example, auto-saving a form as the user types.
+</Tip>
+
+---
+
+## afterinit
+
+`afterinit` skips the very first call. All subsequent calls execute normally. Call `.clear()` to reset, allowing the next call to be skipped again.
+
+### Type signature
+
+```typescript
+export interface IWrappedAfterInitFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T>;
+    clear(): void;
+}
+
+export const afterinit: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>
+) => IWrappedAfterInitFn<T, P>;
+```
+
+### How it works
+
+A `hasComplete` flag starts as `false`. The first time the function is called, `hasComplete` is set to `true` and `Promise.resolve()` is returned immediately without invoking `run`. Every call after that goes straight through to `run`.
+
+### Example: skip the initial render
+
+```typescript
+import { afterinit } from 'functools-kit';
+
+// In a reactive framework, a change handler fires on initial setup.
+// afterinit lets you ignore that first synthetic call.
+const onValueChange = afterinit(async (value: string) => {
+    await syncToRemote(value); // Only called on real user changes.
+});
+
+// Wired up to a reactive subscription:
+watch(formValue, onValueChange);
+```
+
+### Example: skip the first event in a stream
+
+```typescript
+import { afterinit } from 'functools-kit';
+
+const handleMessage = afterinit(async (msg: Message) => {
+    await processMessage(msg);
+});
+
+socket.on('message', handleMessage); // The first message is skipped.
+
+// Reset to skip the next message again after reconnect:
+socket.on('reconnect', () => handleMessage.clear());
+```
+
+---
+
+## singlerun
+
+`singlerun` prevents a function from running a new execution while a previous one is still pending. If the function is called again while `status === "pending"`, the same in-flight promise is returned. Once the promise settles (`"fulfilled"` or `"rejected"`), the next call starts a fresh execution.
+
+### Type signature
+
+```typescript
+export interface ISinglerunClearable {
+    clear: () => void;
+}
+
+export interface ITaskStatus {
+    getStatus: () => "pending" | "fulfilled" | "rejected" | "ready";
+}
+
+export class Task {
+    readonly target: Promise<any>;
+    readonly status: "pending" | "fulfilled" | "rejected";
+    constructor(target: Promise<any>);
+}
+
+export const singlerun: <T extends (...args: any[]) => any>(
+    run: T
+) => T & ISinglerunClearable & ITaskStatus;
+```
+
+### Status values
+
+| Status | Meaning |
+|---|---|
+| `"ready"` | No call has been made yet (or `.clear()` was called). |
+| `"pending"` | A call is in progress. |
+| `"fulfilled"` | The last call resolved successfully. |
+| `"rejected"` | The last call rejected. |
+
+### Example: prevent duplicate initialisation
+
+```typescript
+import { singlerun } from 'functools-kit';
+
+const initDatabase = singlerun(async () => {
+    await runMigrations();
+    await seedData();
+    console.log('Database ready.');
+});
+
+// Safe to call from multiple places — only one init runs at a time.
+await initDatabase();
+await initDatabase(); // Returns the same pending promise if still running.
+
+console.log(initDatabase.getStatus()); // "fulfilled"
+```
+
+### Example: loop control with getStatus
+
+```typescript
+import { singlerun } from 'functools-kit';
+
+const syncLoop = singlerun(async () => {
+    while (true) {
+        await fetchUpdates();
+        await sleep(5_000);
+    }
+});
+
+syncLoop(); // Start the loop.
+
+// Check from outside whether the loop is still running.
+if (syncLoop.getStatus() !== 'pending') {
+    syncLoop(); // Restart if it crashed.
+}
+
+// Force a restart:
+syncLoop.clear();
+syncLoop();
+```
+
+---
+
+## obsolete
+
+`obsolete` marks a function as deprecated. When the wrapped function is called, it logs a warning to the console. In browser environments it also calls `globalThis.prompt()` with a random confirmation code — the function only proceeds if the user types the code. In non-browser environments (Node.js, test runners) the call always throws.
+
+### Type signature
+
+```typescript
+export const obsolete: <T = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    methodName?: string
+) => (...args: P) => Promise<T>;
+```
+
+### Example
+
+```typescript
+import { obsolete } from 'functools-kit';
+
+class UserService {
+    fetchUser = obsolete(
+        async (id: string) => {
+            return legacyApi.getUser(id);
+        },
+        'fetchUser' // Explicit name helps when auto-detection fails.
+    );
+
+    // Replacement:
+    async getUser(id: string) {
+        return newApi.getUser(id);
+    }
+}
+```
+
+<Warning>
+  `obsolete` is a developer-facing guard — do not use it in production paths that must succeed silently. In Node.js and other non-browser environments the call unconditionally throws after logging, making it useful as a hard block on callers who have not migrated.
+</Warning>

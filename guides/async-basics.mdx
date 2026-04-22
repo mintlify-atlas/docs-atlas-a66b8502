@@ -1,0 +1,58 @@
+---
+title: "Async control flow in functools-kit"
+description: "A complete overview of every async higher-order function in functools-kit: what each one does, when to reach for it, and links to in-depth guides."
+---
+
+functools-kit ships a set of higher-order functions (HOFs) that wrap async work — cancellation, queuing, pooling, rate-limiting, retrying, and more. Rather than reaching for one-off `setTimeout` hacks or ad-hoc promise chains, you wrap your function once and get a consistent, composable primitive with a `.clear()` or `.cancel()` escape hatch.
+
+This page maps every async HOF at a glance. Follow the links at the bottom to dive into each group in detail.
+
+## HOF overview
+
+| HOF | What it does | Returns |
+|---|---|---|
+| `cancelable` | Wraps a promise so any in-flight call can be cancelled | `CANCELED_PROMISE_SYMBOL` on cancel |
+| `queued` | Serialises concurrent calls into a single promise queue | `CANCELED_PROMISE_SYMBOL` if cancelled |
+| `execpool` | Caps concurrent executions to `maxExec`, queues the rest | `Promise<T>` |
+| `lock` | Suspends calls while a manual lock is held (`beginLock`/`endLock`) | `CANCELED_PROMISE_SYMBOL` if cancelled |
+| `retry` | Re-runs a failing async function up to `count` times with a `delay` | `CANCELED_PROMISE_SYMBOL` if cancelled |
+| `timeout` | Races the function against a timer | `TIMEOUT_SYMBOL` on expiry |
+| `schedule` | Defers work until the current execution finishes, via a scheduler callback | `T \| null` |
+| `afterinit` | Skips the very first call — useful for change handlers | `Promise<T>` |
+| `singlerun` | Runs only while a previous call is still pending; exposes `Task` status | `Promise<T>` |
+| `debounce` | Delays execution; resets the timer on every new call | `void` (sync) |
+| `throttle` | Limits call frequency to at most once per `delay` ms | `void` (sync) |
+| `singletick` | Coalesces multiple calls within one event-loop tick into one execution | Same as wrapped |
+| `singleshot` | Runs once, memoises the result; `.clear()` resets | Same as wrapped |
+| `obsolete` | Marks a function as deprecated — logs a warning and requires confirmation | `Promise<T>` |
+| `trycatch` | Wraps sync or async functions; returns `CATCH_SYMBOL` (or a custom default) on error | `T \| D` |
+
+## Choosing between queued, execpool, and lock
+
+These three HOFs all manage *how many* async calls run at a time, but they solve different problems.
+
+<Columns cols={3}>
+  <Card title="queued" icon="list-ordered">
+    Every call runs eventually, but only one at a time. Calls execute in the order they arrived. Use when the results of each call build on the previous one, or when order matters.
+  </Card>
+  <Card title="execpool" icon="layer-group">
+    Up to `maxExec` calls run in parallel; the rest wait. Use when work is independent and embarrassingly parallel, but you must cap resource usage (open connections, API rate limits, etc.).
+  </Card>
+  <Card title="lock" icon="lock">
+    You control the gate manually with `beginLock` / `endLock`. All queued calls wait until you lift the lock. Use when a critical section is defined by external events rather than by call boundaries.
+  </Card>
+</Columns>
+
+## Detailed guides
+
+<Columns cols={2}>
+  <Card title="Cancellable promises" icon="circle-stop" href="/guides/cancelable">
+    Deep dive into `cancelable`, `debounce`, `throttle`, `trycatch`, `singletick`, and `singleshot`.
+  </Card>
+  <Card title="Serialising and pooling async calls" icon="arrows-turn-to-dots" href="/guides/queued-execpool">
+    Deep dive into `queued`, `execpool`, and the `lock` HOF with its `beginLock`/`endLock` API.
+  </Card>
+  <Card title="Retry, timeout, and deferred execution" icon="rotate-right" href="/guides/retry-timeout">
+    Deep dive into `retry`, `timeout`, `schedule`, `afterinit`, `singlerun`, and `obsolete`.
+  </Card>
+</Columns>

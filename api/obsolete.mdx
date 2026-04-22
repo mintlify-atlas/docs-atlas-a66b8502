@@ -1,0 +1,52 @@
+---
+title: "obsolete — mark async functions as deprecated"
+description: "obsolete logs a deprecation warning on every call and blocks execution in browsers until a random code is confirmed. In Node.js it always throws after logging."
+---
+
+`obsolete` is a development-time guard for deprecated async functions. When the wrapped function is called, it logs a console warning. In browser environments (where `globalThis.prompt` exists), it blocks execution with an interactive prompt requiring a random code — preventing accidental use. In Node.js, it throws immediately after logging.
+
+## Signature
+
+```typescript
+export const obsolete = <T = any, P extends any[] = any[]>(
+  run: (...args: P) => Promise<T>,
+  methodName?: string
+) => (...args: P) => Promise<T>
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The deprecated async function to wrap.
+</ParamField>
+
+<ParamField path="methodName" type="string">
+  Optional name for the method, used in the log message. If omitted, the wrapper attempts to infer it from the calling object's properties.
+</ParamField>
+
+## Return value
+
+Returns a wrapped function with the same signature. In Node.js (no `globalThis.prompt`), it always throws `Error('react-declarative obsolete hof call')` after logging. In browsers, it prompts the user with a random code; if they enter it correctly, the original function runs.
+
+## Example
+
+```typescript
+import { obsolete } from "functools-kit";
+
+const fetchLegacyData = obsolete(
+  async (id: string) => legacyApiCall(id),
+  "fetchLegacyData"
+);
+
+// Logs a warning, then throws in Node.js
+await fetchLegacyData("123");
+```
+
+<Warning>
+  In Node.js environments (no `globalThis.prompt`), `obsolete` always throws after logging. Do not use it in production code paths — it is a development-time migration helper only.
+</Warning>
+
+## Related
+
+- [singlerun](/api/singlerun) — run once and block subsequent calls
+- [trycatch](/api/functional-helpers) — wrap functions with error handling

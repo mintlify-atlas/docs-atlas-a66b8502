@@ -1,0 +1,73 @@
+---
+title: "Source — factory methods for creating Observers"
+description: "Static factory class for creating Observers in functools-kit — fromArray, fromPromise, fromInterval, fromSubject, merge, join, pipe, unicast, and multicast."
+---
+
+`Source` is a static factory class — you never instantiate it. Its methods create `Observer` instances from various data origins: in-memory values, promises, timers, or existing subjects. Use `Source` when you need to start a reactive pipeline from scratch rather than attaching to an existing `Subject`.
+
+## Static methods
+
+```typescript
+class Source {
+  // Single-value and array sources
+  static fromValue<T>(factory: () => T): Observer<T>;
+  static fromArray<T>(factory: () => T[]): Observer<T>;
+
+  // Async sources
+  static fromPromise<T>(callbackfn: () => Promise<T>): Observer<T>;
+  static fromDelay(timeout: number): Observer<void>;
+  static fromInterval(delay: number): Observer<number>;
+
+  // Subject bridges
+  static fromSubject<T>(subject: TSubject<T>): Observer<T>;
+  static fromBehaviorSubject<T>(subject: TBehaviorSubject<T>): Observer<T>;
+
+  // Hot and cold observables
+  static createHot<T>(callbackfn: (observer: Observer<T>) => void): Observer<T>;
+  static createCold<T>(callbackfn: (observer: Observer<T>) => void): Observer<T>;
+
+  // Combinators
+  static merge<A, B, ...>(observers: [TObserver<A>, TObserver<B>, ...]): Observer<A | B | ...>;
+  static join<A, B, ...>(observers: [...], options?: { buffer?: any[], race?: boolean }): Observer<[A, B, ...]>;
+  static pipe<T>(observer: TObserver<T>, ...operators: Function[]): Observer<T>;
+
+  // Sharing
+  static unicast<T>(observer: TObserver<T>): Observer<T>;
+  static multicast<T>(observer: TObserver<T>): Observer<T>;
+}
+```
+
+## Examples
+
+```typescript
+import { Source, Operator } from "functools-kit";
+
+// From array with operators
+Source.fromArray(() => [1, 2, 3, 2, 1, 4, 5])
+  .operator(Operator.distinct())
+  .operator(Operator.skip(1))
+  .operator(Operator.take(3))
+  .connect(value => console.log(value)); // 2, 3, 4
+
+// Interval with grouping
+Source.fromInterval(100)
+  .operator(Operator.group(3))
+  .connect(batch => console.log(batch)); // [0,1,2], [3,4,5], ...
+
+// Merge two sources
+const a$ = Source.fromInterval(500);
+const b$ = Source.fromSubject(mySubject);
+Source.merge([a$, b$]).connect(console.log);
+
+// Join (combine-latest style)
+Source.join([a$, b$]).connect(([a, b]) => console.log(a, b));
+
+// Await a single value
+const value = await Source.fromPromise(() => fetchData()).toPromise();
+```
+
+## Related
+
+- [Observer](/api/observer) — the stream type returned by all factory methods
+- [Operator](/api/operator) — transform operators for use with `.operator()`
+- [Subject](/api/subject) — push values into an Observer pipeline

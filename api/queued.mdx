@@ -1,0 +1,82 @@
+---
+title: "queued — Serialise async calls into a queue"
+description: "Wraps an async function so calls execute one at a time in order. Supports per-call cancellation and full queue clearing via cancel() and clear()."
+---
+
+`queued` is a higher-order function that serialises concurrent calls to an async function into a strict FIFO queue. Instead of letting multiple invocations run in parallel, each call waits for the previous one to finish before starting. This prevents race conditions in state-mutating operations such as database writes, form saves, or sequential API requests. The wrapper shares the same `CANCELED_PROMISE_SYMBOL` contract as `cancelable`, and exposes both `.cancel()` to abort every pending call and `.clear()` to reset the queue without cancelling in-flight work.
+
+## Signature
+
+```typescript
+export interface IWrappedQueuedFn<T extends any = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    clear(): void;
+    cancel(): void;
+}
+
+export const queued: <T extends any = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedQueuedFn<T, P>;
+
+export { CANCELED_PROMISE_SYMBOL } from './cancelable';
+```
+
+## Parameters
+
+<ParamField path="promise" type="(...args: P) => Promise<T>" required>
+  The async function whose invocations should be serialised. The wrapped function preserves the same argument shape `P` and resolved type `T`.
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedQueuedFn<T, P>` — a callable with two additional methods:
+
+<ResponseField name="(...args: P)" type="Promise<T | typeof CANCELED_PROMISE_SYMBOL>">
+  Enqueues the call. Resolves with the original value, or with `CANCELED_PROMISE_SYMBOL` if the call was cancelled before execution.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Resets the internal queue and resolves any currently awaited chain immediately, without marking pending calls as cancelled.
+</ResponseField>
+
+<ResponseField name="cancel()" type="void">
+  Cancels all queued (not-yet-started) calls by marking them as cancelled, then clears the queue.
+</ResponseField>
+
+## Example
+
+```typescript
+import { queued, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const saveRecord = queued(async (data: Record<string, unknown>) => {
+    const res = await fetch('/api/record', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    return res.json();
+});
+
+// These calls run one after the other, never in parallel
+saveRecord({ name: 'Alice' });
+saveRecord({ name: 'Bob' });
+
+const result = await saveRecord({ name: 'Carol' });
+
+if (result === CANCELED_PROMISE_SYMBOL) {
+    console.log('call was cancelled before it ran');
+} else {
+    console.log('saved:', result);
+}
+
+// Discard all pending calls
+saveRecord.cancel();
+
+// Reset queue state
+saveRecord.clear();
+```
+
+## Related
+
+- [cancelable](/api/cancelable) — simpler "latest wins" cancellation without a queue
+- [lock](/api/lock) — pause the queue externally with `beginLock` / `endLock`
+- [retry](/api/retry) — built on top of `queued`, adds automatic retry with back-off

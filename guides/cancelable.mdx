@@ -1,0 +1,304 @@
+---
+title: "Cancellable promises with cancelable"
+description: "Use cancelable, debounce, throttle, trycatch, singletick, and singleshot for fine-grained control over when async work runs and how failures are handled."
+---
+
+When multiple overlapping calls share a single async resource — a search box firing off fetch requests, a live-preview re-rendering on every keystroke — you need a way to discard stale in-flight work without letting it settle into state. functools-kit provides `cancelable` for that, alongside a family of related HOFs that control *when* a call fires and *what* is returned when something goes wrong.
+
+## cancelable
+
+`cancelable` wraps any promise-returning function and adds a `.cancel()` method. Calling cancel while a promise is pending resolves that promise with `CANCELED_PROMISE_SYMBOL` instead of the real value, and any further pending call is silently dropped.
+
+### Type signature
+
+```typescript
+export const CANCELED_PROMISE_SYMBOL: unique symbol;
+
+export interface IWrappedCancelableFn<T = any, P extends any[] = any> {
+    (...args: P): Promise<T | typeof CANCELED_PROMISE_SYMBOL>;
+    cancel(): void;
+}
+
+export const cancelable: <T = any, P extends any[] = any[]>(
+    promise: (...args: P) => Promise<T>
+) => IWrappedCancelableFn<T, P>;
+```
+
+### How it works
+
+Each call to the wrapped function stores a `cancelRef` closure. When the next call arrives, `cancelRef` is invoked first, resolving the previous promise with `CANCELED_PROMISE_SYMBOL`. The underlying promise is still awaited, but its resolution is ignored if `hasCanceled` is already `true`. This means no unhandled-rejection noise: the original promise runs to completion, its result just never surfaces.
+
+### Example: search-as-you-type
+
+```typescript
+import { cancelable, CANCELED_PROMISE_SYMBOL } from 'functools-kit';
+
+const fetchResults = cancelable(async (query: string) => {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    return res.json();
+});
+
+async function onInput(query: string) {
+    const result = await fetchResults(query);
+
+    // Always check before using the result.
+    if (result === CANCELED_PROMISE_SYMBOL) {
+        return; // A newer call superseded this one.
+    }
+
+    renderResults(result);
+}
+
+// Call .cancel() directly when needed (e.g. on component unmount).
+function onDestroy() {
+    fetchResults.cancel();
+}
+```
+
+<Note>
+  `cancelable` cancels the **previous** call every time a new one arrives. If you only want to cancel on explicit user action, call `.cancel()` yourself instead of firing a new wrapped call.
+</Note>
+
+---
+
+## debounce
+
+`debounce` delays invoking a function until `delay` ms have passed since the last call. Every new call resets the timer. It is synchronous — the return value of the wrapped function is not captured; use it for side-effects such as triggering a fetch after typing stops.
+
+### Type signature
+
+```typescript
+export interface IDebounceClearable {
+    clear: () => void;   // Cancel the pending timer without running the function.
+    flush: () => void;   // Run immediately, ignoring the remaining delay.
+    pending: () => boolean;
+}
+
+export const debounce: <T extends (...args: any[]) => any>(
+    run: T,
+    delay?: number        // Default: 1000 ms. Pass 0 to use requestAnimationFrame.
+) => T & IDebounceClearable;
+```
+
+### Example
+
+```typescript
+import { debounce } from 'functools-kit';
+
+const saveToServer = debounce(async (value: string) => {
+    await fetch('/api/save', { method: 'POST', body: value });
+}, 500);
+
+// Only the last call within a 500 ms burst actually reaches the server.
+inputEl.addEventListener('input', (e) => saveToServer(e.target.value));
+
+// Flush before page unload to avoid losing the last edit.
+window.addEventListener('beforeunload', () => saveToServer.flush());
+```
+
+<Tip>
+  Pass `delay = 0` to debounce to the next animation frame via `requestAnimationFrame` instead of a fixed timer. This is useful for batching DOM reads/writes.
+</Tip>
+
+---
+
+## throttle
+
+`throttle` limits how often a function can fire. The first call within any `delay` ms window executes immediately; subsequent calls within the same window are swallowed. Unlike debounce, throttle guarantees the function runs at leading edge without waiting.
+
+### Type signature
+
+```typescript
+export interface IClearableThrottle {
+    clear: () => void; // Cancel any pending trailing-edge timer.
+}
+
+export const throttle: <T extends (...args: any[]) => any>(
+    run: T,
+    delay?: number     // Default: 1000 ms.
+) => T & IClearableThrottle;
+```
+
+### Example
+
+```typescript
+import { throttle } from 'functools-kit';
+
+const trackScrollPosition = throttle((position: number) => {
+    analytics.track('scroll', { position });
+}, 200);
+
+window.addEventListener('scroll', () => {
+    trackScrollPosition(window.scrollY);
+});
+```
+
+### debounce vs throttle
+
+| | debounce | throttle |
+|---|---|---|
+| First call | Delayed | Immediate |
+| Burst of calls | Only the last one fires | First fires; rest are dropped |
+| Use case | Stop-then-act (search, resize) | Continuous sampling (scroll, mousemove) |
+
+---
+
+## trycatch
+
+`trycatch` wraps any sync or async function so that exceptions never propagate. Instead, errors are caught and a configurable `defaultValue` is returned. The sentinel `CATCH_SYMBOL` is the default when no `defaultValue` is provided.
+
+### Type signature
+
+```typescript
+export const CATCH_SYMBOL: unique symbol;
+
+export interface IControllTrycatch<DefaultValue = typeof CATCH_SYMBOL, Params extends unknown[] = any[]> {
+    allowedErrors?: { new (): Error }[];
+    fallback?: (error: Error, ...args: Params) => void;
+    defaultValue: DefaultValue;
+}
+
+export const trycatch: <
+    T extends (...args: any[]) => any,
+    V,
+    D = typeof CATCH_SYMBOL
+>(
+    run: T,
+    config?: Partial<IControllTrycatch<D, Parameters<T>>>
+) => (...args: Parameters<T>) => ReturnType<T> | D;
+```
+
+<Note>
+  `trycatch` works with both synchronous and asynchronous functions. When the wrapped function returns a `Promise`, errors are caught via an internal awaiter.
+</Note>
+
+### Example: safe API call with fallback
+
+```typescript
+import { trycatch, CATCH_SYMBOL } from 'functools-kit';
+
+const safeGetUser = trycatch(
+    async (id: string) => {
+        const res = await fetch(`/api/users/${id}`);
+        if (!res.ok) throw new Error('Not found');
+        return res.json() as Promise<User>;
+    },
+    {
+        defaultValue: null,
+        fallback: (error, id) => console.warn(`Failed to load user ${id}:`, error),
+    }
+);
+
+const user = await safeGetUser('abc123');
+if (user === null) {
+    showErrorBanner();
+}
+```
+
+### Example: allow only specific error types
+
+```typescript
+import { trycatch } from 'functools-kit';
+
+class NotFoundError extends Error {}
+
+const safeRead = trycatch(readConfig, {
+    allowedErrors: [NotFoundError],
+    defaultValue: defaultConfig,
+});
+// Only NotFoundError is swallowed. All other errors still throw.
+```
+
+---
+
+## singletick
+
+`singletick` coalesces all calls that arrive within the same event-loop tick into a single execution. If you call the wrapped function five times synchronously, only the first invocation runs; the memo is cleared at the end of the tick via `setTimeout(fn, singletick.delay)` (default `0`).
+
+### Type signature
+
+```typescript
+export interface IClearableSingletick {
+    clear: () => void;
+}
+
+export const singletick: <T extends (...args: any[]) => any>(
+    run: T
+) => T & IClearableSingletick;
+
+singletick.delay: number; // Default 0. Adjust to change the tick window.
+```
+
+### Example: batch state writes
+
+```typescript
+import { singletick } from 'functools-kit';
+
+const flushToStore = singletick((updates: Record<string, unknown>) => {
+    store.batchUpdate(updates);
+});
+
+// All three calls in this synchronous block collapse into one store write.
+flushToStore({ a: 1 });
+flushToStore({ b: 2 });
+flushToStore({ c: 3 }); // Only this call's args are passed to the store.
+```
+
+<Warning>
+  Because `singletick` internally uses `singleshot`, only the **first** call's arguments are forwarded to the wrapped function within a tick — not the last. If you need the latest arguments, use `debounce` with `delay = 0` instead.
+</Warning>
+
+---
+
+## singleshot
+
+`singleshot` runs a function exactly once, memoises the result, and returns that same result for every subsequent call. Call `.clear()` to reset and allow another execution.
+
+### Type signature
+
+```typescript
+export interface ISingleshotClearable<T extends (...args: any[]) => any> {
+    clear: () => void;
+    hasValue: () => boolean;
+    setValue: (value: ReturnType<T>) => void;
+}
+
+export const singleshot: <T extends (...args: any[]) => any>(
+    run: T
+) => T & ISingleshotClearable<T>;
+```
+
+<Note>
+  If the wrapped function returns a `Promise` that rejects, `singleshot` automatically resets `hasRunned` to `false` so the next call will try again.
+</Note>
+
+### Example: lazy singleton initialisation
+
+```typescript
+import { singleshot } from 'functools-kit';
+
+const getDbConnection = singleshot(async () => {
+    const conn = await createConnection(config);
+    return conn;
+});
+
+// First call opens the connection; all subsequent calls receive the same promise.
+const conn1 = await getDbConnection();
+const conn2 = await getDbConnection(); // same connection, no second open
+
+// Force reconnection (e.g. after a disconnect event):
+getDbConnection.clear();
+const conn3 = await getDbConnection(); // new connection opened
+```
+
+### setValue: injecting a value without running the function
+
+```typescript
+const getConfig = singleshot(loadConfig);
+
+// Pre-populate with a value obtained from a different source.
+getConfig.setValue(cachedConfig);
+
+console.log(getConfig.hasValue()); // true
+const cfg = getConfig(); // returns cachedConfig without calling loadConfig
+```

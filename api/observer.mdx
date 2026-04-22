@@ -1,0 +1,120 @@
+---
+title: "Observer — composable async event stream"
+description: "The core reactive type in functools-kit. Chain map, filter, tap, flatMap, debounce, and merge to build async pipelines with end-to-end error propagation."
+---
+
+`Observer<Data>` is the base reactive class in functools-kit. It represents a stream of values that you transform and consume by chaining operators. Observers are returned by `Subject.toObserver()`, `Source` factory methods, and every operator — making them the universal currency of the reactive system.
+
+## Class
+
+```typescript
+class Observer<Data = any> implements TObserver<Data> {
+  get isShared(): boolean;
+  get hasListeners(): boolean;
+
+  // Operators — each returns a new Observer
+  map<T>(callbackfn: (value: Data) => T): Observer<T>;
+  filter(predicate: (value: Data) => boolean): Observer<Data>;
+  tap(callbackfn: (value: Data) => void): Observer<Data>;
+  reduce<T>(callbackfn: (acm: T, cur: Data) => T, begin: T): Observer<T>;
+  flatMap<T>(callbackfn: (value: Data) => T[]): Observer<T>;
+  split(): [Observer<Data>, Observer<Data>];
+  mapAsync<T>(callbackfn: (value: Data) => Promise<T>): Observer<T>;
+  merge<T>(observer: TObserver<T>): Observer<Data | T>;
+  debounce(delay: number): Observer<Data>;
+  delay(timeout: number): Observer<Data>;
+  repeat(interval: number): Observer<Data>;
+  once(): Observer<Data>;
+
+  // Termination
+  connect(callbackfn: (value: Data) => void | Promise<void>): () => void;
+  toPromise(): Promise<Data>;
+
+  // Operator adapter
+  operator<T>(getOperator: (observer: Observer<Data>) => Observer<T>): Observer<T>;
+}
+```
+
+## Key methods
+
+<ParamField path="map" type="(callbackfn: (value: Data) => T) => Observer<T>">
+  Transform each emitted value synchronously.
+</ParamField>
+
+<ParamField path="filter" type="(predicate: (value: Data) => boolean) => Observer<Data>">
+  Drop values for which the predicate returns false.
+</ParamField>
+
+<ParamField path="mapAsync" type="(callbackfn: (value: Data) => Promise<T>) => Observer<T>">
+  Transform values with an async function. Errors propagate through the chain.
+</ParamField>
+
+<ParamField path="debounce" type="(delay: number) => Observer<Data>">
+  Emit only after `delay` ms of silence (no new values).
+</ParamField>
+
+<ParamField path="connect" type="(callbackfn: (value: Data) => void | Promise<void>) => () => void">
+  Subscribe to values. Returns an unsubscribe function.
+</ParamField>
+
+<ParamField path="toPromise" type="() => Promise<Data>">
+  Await the next value emitted. Resolves once, then the subscription ends.
+</ParamField>
+
+## Example
+
+```typescript
+import { Subject } from "functools-kit";
+
+const subject = new Subject<number>();
+
+const unsubscribe = subject
+  .filter(n => n % 2 === 0)
+  .map(n => n * 2)
+  .debounce(200)
+  .connect(value => console.log(value));
+
+subject.next(1);
+subject.next(2); // logs 4 after 200ms
+subject.next(4); // logs 8 after 200ms
+
+unsubscribe();
+```
+
+## waitForNext
+
+A standalone utility that awaits the next value from a Subject matching a condition. Optionally resolves with `TIMEOUT_SYMBOL` after a delay if no matching value arrives.
+
+```typescript
+export const waitForNext = <T = any>(
+  subject: TSubject<T>,
+  condition: (t: T) => boolean,
+  delay?: number  // ms to wait before resolving TIMEOUT_SYMBOL; 0 = wait forever
+): Promise<T | typeof TIMEOUT_SYMBOL>
+```
+
+```typescript
+import { Subject, waitForNext, TIMEOUT_SYMBOL } from "functools-kit";
+
+const events = new Subject<{ type: string; id: number }>();
+
+// Wait up to 5 seconds for a "ready" event for id=42
+const result = await waitForNext(
+  events,
+  (e) => e.type === "ready" && e.id === 42,
+  5_000
+);
+
+if (result === TIMEOUT_SYMBOL) {
+  console.warn("Timed out waiting for ready event");
+} else {
+  console.log("Got:", result);
+}
+```
+
+## Related
+
+- [Subject](/api/subject) — emits values into an Observer
+- [BehaviorSubject](/api/behavior-subject) — Subject with current value replay
+- [Source](/api/source) — factory methods for creating Observers
+- [Operator](/api/operator) — reusable stream transform operators

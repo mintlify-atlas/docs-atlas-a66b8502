@@ -1,0 +1,82 @@
+---
+title: "execpool — Bounded concurrency execution pool"
+description: "Limits how many async calls run simultaneously. Queues overflow calls and drains them as slots free up. Configurable concurrency limit and polling delay."
+---
+
+`execpool` is a higher-order function that wraps an async function with a bounded concurrency pool. When the number of active executions reaches `maxExec`, additional calls are queued in memory and processed as slots become available. This is useful for rate-limiting outbound requests, controlling CPU-bound worker usage, or throttling access to a shared resource without dropping work. A `.clear()` method lets you discard all pending (not-yet-started) calls and reset the pool.
+
+## Signature
+
+```typescript
+export interface IWrappedExecpoolFn<T extends any = any, P extends any[] = any> {
+    (...args: P): Promise<T>;
+    clear(): void;
+}
+
+export const execpool: <T extends any = any, P extends any[] = any[]>(
+    run: (...args: P) => Promise<T>,
+    options?: {
+        maxExec?: number;  // default: 3
+        delay?: number;    // default: 10 (ms)
+    }
+) => IWrappedExecpoolFn<T, P>;
+```
+
+## Parameters
+
+<ParamField path="run" type="(...args: P) => Promise<T>" required>
+  The async function to execute within the pool. Each invocation of the wrapped function will eventually call `run` once, in the order calls were received.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration object.
+
+  <ParamField path="options.maxExec" type="number">
+    Maximum number of concurrent executions. Defaults to `3`.
+  </ParamField>
+
+  <ParamField path="options.delay" type="number">
+    Polling interval in milliseconds used by the internal drain loop when the pool is at capacity. Defaults to `10`.
+  </ParamField>
+</ParamField>
+
+## Return value
+
+Returns an `IWrappedExecpoolFn<T, P>` — a callable with one additional method:
+
+<ResponseField name="(...args: P)" type="Promise<T>">
+  Submits the call. Executes immediately if a slot is free; otherwise enqueues and resolves once the pool drains to availability.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Drains the pending queue (discards all not-yet-started calls) and resets the active execution set. In-flight promises are not interrupted.
+</ResponseField>
+
+## Example
+
+```typescript
+import { execpool } from 'functools-kit';
+
+const uploadFile = execpool(
+    async (filePath: string) => {
+        const data = await readFile(filePath);
+        await uploadToS3(data);
+        return filePath;
+    },
+    { maxExec: 5, delay: 50 }
+);
+
+const files = ['/tmp/a.bin', '/tmp/b.bin', '/tmp/c.bin', '/tmp/d.bin', '/tmp/e.bin', '/tmp/f.bin'];
+
+// At most 5 uploads run at once; the 6th waits for a slot
+const results = await Promise.all(files.map(uploadFile));
+console.log('uploaded:', results);
+
+// Discard queued-but-not-started uploads
+uploadFile.clear();
+```
+
+## Related
+
+- [queued](/api/queued) — fully serial execution (concurrency of 1)
+- [singlerun](/api/singlerun) — prevent more than one active run at a time
